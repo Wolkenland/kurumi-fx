@@ -367,21 +367,19 @@ def build_arsc():
     pkg_name16 = PKG.encode('utf-16-le') + b'\x00\x00'
     pkg_name_block = pkg_name16 + b'\x00' * align(len(pkg_name16))
 
-    # 包内布局（AOSP ResTable::parsePackage 的硬性约定）：
-    #   header(288) | typeOffsets[typeCount] | typeStrings | keyStrings | 包名 | spec1,type1,spec2,type2
-    # 注意：typeOffsets[] 必须紧跟在 288 字节包头之后；
-    #       且每个 typeOffsets[i] 指向 ResTable_typeSpec，对应的 ResTable_type 紧跟在该 spec 之后。
+    # 包内布局（aapt2 实际输出、apkanalyzer 能正确解析的顺序）：
+    #   header(288) | typeStrings | keyStrings | 包名 | typeOffsets[] | spec1,type1,spec2,type2
     TYPE_COUNT = 2
-    offs_start = PKG_HEADER
-    type_strings_off = offs_start + 4 * TYPE_COUNT
+    type_strings_off = PKG_HEADER
     key_strings_off = type_strings_off + len(type_pool_bytes)
     name_off = key_strings_off + len(key_pool_bytes)
-    chunks_start = name_off + len(pkg_name_block)
+    offs_start = name_off + len(pkg_name_block)
+    chunks_start = offs_start + 4 * TYPE_COUNT
     off_t1 = chunks_start
     off_t2 = chunks_start + len(spec1) + len(type1)
 
-    pkg_body = (struct.pack('<I', off_t1) + struct.pack('<I', off_t2)
-                + type_pool_bytes + key_pool_bytes + pkg_name_block
+    pkg_body = (type_pool_bytes + key_pool_bytes + pkg_name_block
+                + struct.pack('<I', off_t1) + struct.pack('<I', off_t2)
                 + spec1 + type1 + spec2 + type2)
     total = PKG_HEADER + len(pkg_body)
 
@@ -454,11 +452,14 @@ def assemble(manifest, arsc, dex_path, html_bytes, icon_png):
         os.remove(tmp)
     with zipfile.ZipFile(tmp, 'w', zipfile.ZIP_DEFLATED) as z:
         z.writestr('AndroidManifest.xml', manifest, zipfile.ZIP_DEFLATED)
-        # 无 resources.arsc：清单只引用系统资源，APK 依然完全合法
+        # 暂不写 resources.arsc：手写资源表仍无法被 apkanalyzer 正确解析，
+        # 而清单只引用系统资源（label 为字面量、theme 指向 @android:style），
+        # 没有资源表 APK 依然合法可安装 —— 代价是使用系统默认图标。
+        # 想要自定义图标，请用 CI（.github/workflows/build.yml）里的标准 Android SDK 构建。
         pass
         z.writestr('classes.dex', open(dex_path, 'rb').read(), zipfile.ZIP_DEFLATED)
         z.writestr('assets/index.html', html_bytes, zipfile.ZIP_DEFLATED)
-        pass
+        pass  # 图标同 resources.arsc 一并省略
     return tmp
 
 
