@@ -184,6 +184,9 @@ RES_ICON_ID = 0x7F020000              # drawable/ic_launcher
 
 def encode_value(key, v):
     """返回 (rawValue 字符串或 None, dataType, data)"""
+    if key.startswith('#'):
+        # 无命名空间属性（如 manifest 的 package），值按字符串处理
+        return v, T_STRING, None
     if key in REF_ATTRS:
         return None, T_REFERENCE, REF_ATTRS[key]
     if key in ('icon', 'roundIcon'):
@@ -247,8 +250,12 @@ def build_axml(root):
             raw_i = pool.index[raw] if raw is not None else 0xFFFFFFFF
             if dt == T_STRING:
                 data = pool.index[v]
-            nm_i = name_idx[k] if k is not None else pool.add(v)
-            ns_i = ns_idx if k is not None else 0xFFFFFFFF
+            if k.startswith('#'):
+                nm_i = pool.add(k[1:])      # package / 其它无前缀属性
+                ns_i = 0xFFFFFFFF
+            else:
+                nm_i = name_idx[k]
+                ns_i = ns_idx
             attr_datas.append((ns_i, nm_i, raw_i, dt, data))
         ext = struct.pack('<IIHHHHHH', 0xFFFFFFFF, tag_i, 20, 20, len(attr_datas), 0, 0, 0)
         for ns_i, nm_i, raw_i, dt, data in attr_datas:
@@ -299,6 +306,7 @@ def manifest_axml():
         ('theme', '@android:style/Theme.Black.NoTitleBar'),
     ], [activity])
     root = ('manifest', [
+        ('#package', PKG),                 # ← 必须！缺了它 APK 无法安装
         ('versionCode', str(VERSION_CODE)),
         ('versionName', VERSION_NAME),
     ], [('uses-sdk', [('minSdkVersion', '21'), ('targetSdkVersion', '34')], [])] + perms + [application])
@@ -367,18 +375,21 @@ def build_arsc():
     pkg_name16 = PKG.encode('utf-16-le') + b'\x00\x00'
     pkg_name_block = pkg_name16 + b'\x00' * align(len(pkg_name16))
 
-    # 包内布局（aapt2 实际输出、apkanalyzer 能正确解析的顺序）：
-    #   header(288) | typeStrings | keyStrings | 包名 | typeOffsets[] | spec1,type1,spec2,type2
+    # 包内布局（AOSP ResTable_package 的真实结构）：
+    #   header(288) | typeStrings | keyStrings | typeOffsets[] | spec1,type1,spec2,type2
+    #
+    # 重点：包名【已经】写在 header 的 name[128] 字段里（12..268 字节，UTF-16），
+    #       body 里绝对不能再写一次 —— 否则解析器会把包名的首字节当成 chunk 头，
+    #       报 "Unknown chunk type: 99"（99 正好是 'c'）。
     TYPE_COUNT = 2
     type_strings_off = PKG_HEADER
     key_strings_off = type_strings_off + len(type_pool_bytes)
-    name_off = key_strings_off + len(key_pool_bytes)
-    offs_start = name_off + len(pkg_name_block)
+    offs_start = key_strings_off + len(key_pool_bytes)
     chunks_start = offs_start + 4 * TYPE_COUNT
     off_t1 = chunks_start
     off_t2 = chunks_start + len(spec1) + len(type1)
 
-    pkg_body = (type_pool_bytes + key_pool_bytes + pkg_name_block
+    pkg_body = (type_pool_bytes + key_pool_bytes
                 + struct.pack('<I', off_t1) + struct.pack('<I', off_t2)
                 + spec1 + type1 + spec2 + type2)
     total = PKG_HEADER + len(pkg_body)
@@ -452,14 +463,11 @@ def assemble(manifest, arsc, dex_path, html_bytes, icon_png):
         os.remove(tmp)
     with zipfile.ZipFile(tmp, 'w', zipfile.ZIP_DEFLATED) as z:
         z.writestr('AndroidManifest.xml', manifest, zipfile.ZIP_DEFLATED)
-        # 暂不写 resources.arsc：手写资源表仍无法被 apkanalyzer 正确解析，
-        # 而清单只引用系统资源（label 为字面量、theme 指向 @android:style），
-        # 没有资源表 APK 依然合法可安装 —— 代价是使用系统默认图标。
-        # 想要自定义图标，请用 CI（.github/workflows/build.yml）里的标准 Android SDK 构建。
+        # 暂时不写 resources.arsc：先确保能安装，再处理图标
         pass
         z.writestr('classes.dex', open(dex_path, 'rb').read(), zipfile.ZIP_DEFLATED)
         z.writestr('assets/index.html', html_bytes, zipfile.ZIP_DEFLATED)
-        pass  # 图标同 resources.arsc 一并省略
+        pass
     return tmp
 
 
