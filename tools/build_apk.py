@@ -197,13 +197,30 @@ def encode_value(key, v):
 
 
 def build_axml(root):
-    """root = (tag, [(attr_key|None, value)], [children])"""
+    """把元素树编码成 AXML（二进制 XML）。
+
+    关键顺序（与 aapt2 一致，Android 的 PackageParser 严格要求）：
+        RES_XML
+        ├── StringPool      —— 前 len(ATTR_ORDER) 项必须是【属性名】
+        ├── ResourceMap     —— 按索引给出属性名对应的 android 资源 ID
+        ├── StartNamespace  —— 声明 xmlns:android
+        ├── ...元素树...
+        └── EndNamespace
+
+    少了 ResourceMap，PackageParser 的 obtainAttributes() 会按资源 ID 查找属性，
+    结果一个都匹配不上 —— APK 能解析但装不上（找不到 Activity）。
+    """
+    ATTR_ORDER = list(ATTR_ID.keys())
+
     pool = StringPool()
+    # ① 属性名必须排在最前面，ResourceMap 才能按索引一一对应
+    name_idx = {}
+    for k in ATTR_ORDER:
+        name_idx[k] = pool.add(k)
+    # ② 其余字符串
     ns_idx = pool.add(EXT_NS)
     prefix_idx = pool.add('android')
-    name_idx = {k: pool.add(k) for k in ATTR_ID}
 
-    # 1) 先把所有字符串入池，顺序确定
     def collect(node):
         tag, attrs, kids = node
         pool.add(tag)
@@ -215,8 +232,11 @@ def build_axml(root):
             collect(c)
     collect(root)
 
-    # 2) 生成元素流
     body = bytearray()
+    node_hdr = struct.pack('<II', 0, 0xFFFFFFFF)      # lineNumber, comment
+
+    # ③ StartNamespace
+    body.extend(chunk(0x0100, 16, node_hdr + struct.pack('<II', prefix_idx, ns_idx)))
 
     def emit(node):
         tag, attrs, kids = node
@@ -234,7 +254,6 @@ def build_axml(root):
         for ns_i, nm_i, raw_i, dt, data in attr_datas:
             ext += struct.pack('<III', ns_i, nm_i, raw_i)
             ext += struct.pack('<HBBI', 8, 0, dt, data & 0xFFFFFFFF)
-        node_hdr = struct.pack('<II', 0, 0xFFFFFFFF)      # lineNumber, comment
         body.extend(chunk(0x0102, 16, node_hdr + ext))
         for c in kids:
             emit(c)
@@ -242,8 +261,16 @@ def build_axml(root):
 
     emit(root)
 
+    # ④ EndNamespace
+    body.extend(chunk(0x0101, 16, node_hdr + struct.pack('<II', prefix_idx, ns_idx)))
+
+    # ⑤ ResourceMap：索引 i 的属性名 → 资源 ID
+    res_ids = bytearray()
+    for k in ATTR_ORDER:
+        res_ids += struct.pack('<I', ATTR_ID[k] & 0xFFFFFFFF)
+    res_map = chunk(0x0180, 8, bytes(res_ids))
+
     ns_pool = pool.build()
-    res_map = chunk(0x0180, 8, b'')
     return chunk(0x0003, 8, ns_pool + res_map + bytes(body))
 
 

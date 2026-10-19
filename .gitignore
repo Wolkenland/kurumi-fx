@@ -1,7 +1,16 @@
-dist/*.html
-dist/*.idsig
+# 构建中间产物
 .apkbuild/
 android/assets/
-node_modules/
 tools/__pycache__/
+__pycache__/
+*.pyc
+node_modules/
 .DS_Store
+
+# v4 签名附带文件（APK 本体要发布，保留）
+dist/*.idsig
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
