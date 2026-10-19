@@ -9,28 +9,33 @@
 
 ## 立即开始
 
-两种形态都已打包好，放在手机 **`Download/`** 目录：
+### 方式一：在线玩（最省事）
+**https://wolkenland.github.io/kurumi-fx/**
 
-| 文件 | 大小 | 说明 |
-|---|---|---|
-| `FX战士久留美.apk` | 92 KB | **安卓应用**。直接安装，全屏无地址栏，AI 功能无跨域限制 |
-| `FX战士久留美(网页版).html` | 239 KB | 单文件网页，用浏览器打开，零安装 |
+手机浏览器打开 → 菜单 → **添加到主屏幕** → 桌面出现图标，点开即全屏、离线可玩的 App 体验。
 
-### 方式一：安装 APK（推荐）
-点开 `Download/FX战士久留美.apk` 安装。首次需要允许「安装未知应用」。
-APK 版通过原生层发 AI 请求，**完全绕过 WebView 的跨域限制**——要用 AI 交易员就用这个。
+### 方式二：安装 APK
+`dist/FX战士久留美_0.0.1.apk`（8.4 MB）
 
-### 方式二：直接打开网页版
-把 `dist/index.html` 用手机浏览器打开即可。整个游戏（含所有图形、音效、剧情、数据）都在这一个文件里，**不需要网络**。
+| 项目 | 值 |
+|---|---|
+| 包名 | `dfy.fxzsjlm.wolkenland` |
+| 版本 | 0.0.1 (versionCode 19) |
+| minSdk / targetSdk | 24 / 34 |
 
-### 方式三：本地服务器
+由 [ToApp](https://top.seegood.toapp) 这类 WebView 打包工具生成（内嵌 `assets/web/index.html`，
+与 `dist/index.html` 逐字节一致）。首次安装需允许「安装未知应用」。
+
+### 方式三：直接打开网页文件
+`dist/index.html`（239 KB，单文件自包含）用手机浏览器打开即可，**不需要网络**。
+
+### 方式四：本地服务器
 ```sh
-cd dist && python3 -m http.server 8899
-# 浏览器访问 http://127.0.0.1:8899/index.html
+cd docs && python3 -m http.server 8899
+# 浏览器访问 http://127.0.0.1:8899/   （PWA 在 localhost 下可安装）
 ```
-本地服务器方式在部分浏览器下可直接"添加到主屏幕"，获得全屏无地址栏的体验。
 
-详见 [SHARE.md](SHARE.md)（怎么分享给朋友 / APK 打包原理）。
+详见 [SHARE.md](SHARE.md)（怎么分享给朋友）。
 
 ---
 
