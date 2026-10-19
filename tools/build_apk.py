@@ -299,6 +299,8 @@ def manifest_axml():
     ], [intent])
     application = ('application', [
         ('label', APP_NAME),
+        ('icon', '@drawable/ic_launcher'),
+        ('roundIcon', '@drawable/ic_launcher'),
         ('hardwareAccelerated', 'true'),
         ('usesCleartextTraffic', 'true'),
         ('allowBackup', 'true'),
@@ -382,22 +384,24 @@ def build_arsc():
     #       body 里绝对不能再写一次 —— 否则解析器会把包名的首字节当成 chunk 头，
     #       报 "Unknown chunk type: 99"（99 正好是 'c'）。
     TYPE_COUNT = 2
-    type_strings_off = PKG_HEADER
+    # 实验：把 typeOffsets[] 算进 headerSize，使 chunk 从 headerSize 处开始
+    offs_start = PKG_HEADER
+    type_strings_off = offs_start + 4 * TYPE_COUNT
     key_strings_off = type_strings_off + len(type_pool_bytes)
-    offs_start = key_strings_off + len(key_pool_bytes)
-    chunks_start = offs_start + 4 * TYPE_COUNT
+    chunks_start = key_strings_off + len(key_pool_bytes)
     off_t1 = chunks_start
     off_t2 = chunks_start + len(spec1) + len(type1)
+    HDR_SIZE = PKG_HEADER + 4 * TYPE_COUNT
 
-    pkg_body = (type_pool_bytes + key_pool_bytes
-                + struct.pack('<I', off_t1) + struct.pack('<I', off_t2)
+    pkg_body = (struct.pack('<I', off_t1) + struct.pack('<I', off_t2)
+                + type_pool_bytes + key_pool_bytes
                 + spec1 + type1 + spec2 + type2)
-    total = PKG_HEADER + len(pkg_body)
+    total = HDR_SIZE + len(pkg_body) - 4 * TYPE_COUNT
 
     name_field = pkg_name16[:254]
     name_field += b'\x00' * (256 - len(name_field))
 
-    hdr = struct.pack('<HHI', 0x0200, PKG_HEADER, total)
+    hdr = struct.pack('<HHI', 0x0200, HDR_SIZE, total)
     hdr += struct.pack('<I', 0x7f)
     hdr += name_field
     hdr += struct.pack('<I', type_strings_off)
@@ -406,7 +410,7 @@ def build_arsc():
     hdr += struct.pack('<I', 2)
     hdr += struct.pack('<I', 0)
     # 注意：typeIdOffset 已在 pkg_body 开头写入，这里保持不变
-    assert len(hdr) == PKG_HEADER, len(hdr)
+    assert len(hdr) == PKG_HEADER, len(hdr)   # 固定 288 字节头
 
     package = hdr + pkg_body
     vpool_bytes = vpool.build()
@@ -463,11 +467,13 @@ def assemble(manifest, arsc, dex_path, html_bytes, icon_png):
         os.remove(tmp)
     with zipfile.ZipFile(tmp, 'w', zipfile.ZIP_DEFLATED) as z:
         z.writestr('AndroidManifest.xml', manifest, zipfile.ZIP_DEFLATED)
-        # 暂时不写 resources.arsc：先确保能安装，再处理图标
-        pass
+        zi = zipfile.ZipInfo('resources.arsc')
+        zi.compress_type = zipfile.ZIP_STORED
+        zi.external_attr = 0o600 << 16
+        z.writestr(zi, arsc)
         z.writestr('classes.dex', open(dex_path, 'rb').read(), zipfile.ZIP_DEFLATED)
         z.writestr('assets/index.html', html_bytes, zipfile.ZIP_DEFLATED)
-        pass
+        z.writestr('res/drawable/ic_launcher.png', icon_png, zipfile.ZIP_DEFLATED)
     return tmp
 
 
