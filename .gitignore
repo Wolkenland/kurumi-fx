@@ -1,0 +1,7 @@
+dist/*.html
+dist/*.idsig
+.apkbuild/
+android/assets/
+node_modules/
+tools/__pycache__/
+.DS_Store

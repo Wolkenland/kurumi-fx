@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 图标前景：粉色 K 线柱 + 一条强平线 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#FF3DDC97" android:pathData="M30,58h10v22h-10z"/>
+    <path android:fillColor="#FF3DDC97" android:pathData="M35,50h1v40h-1z"/>
+    <path android:fillColor="#FFFF4D6D" android:pathData="M50,44h10v36h-10z"/>
+    <path android:fillColor="#FFFF4D6D" android:pathData="M55,36h1v52h-1z"/>
+    <path android:fillColor="#FFFFD166" android:pathData="M70,32h10v48h-10z"/>
+    <path android:fillColor="#FFFFD166" android:pathData="M75,24h1v64h-1z"/>
+    <path android:fillColor="#FFFF8FB1" android:pathData="M22,84h64v2h-64z"/>
+</vector>

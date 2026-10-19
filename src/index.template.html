@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#05070c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="format-detection" content="telephone=no">
+<meta name="description" content="FX战士久留美 同人交易模拟器 · 非官方粉丝作品">
+<title>FX戦士くるみちゃん · 交易模拟器</title>
+<style>/*__CSS__*/</style>
+</head>
+<body>
+
+<div id="app">
+
+  <!-- 顶部资产栏 -->
+  <header id="hud">
+    <div class="hud-top">
+      <span class="hud-name">FX戦士くるみちゃん　<b id="hudPair">USD/JPY</b></span>
+      <span class="hud-clock mono" id="hudDate">—</span>
+      <div class="spd" id="spd">
+        <button data-v="0">❚❚</button>
+        <button data-v="1" class="on">×1</button>
+        <button data-v="2">×2</button>
+        <button data-v="4">×4</button>
+      </div>
+    </div>
+    <div class="hud-eq">
+      <span class="lbl">净值<br>EQUITY</span>
+      <span id="equityVal" class="mono">0</span>
+      <span id="eqDelta" class="mono">0 円</span>
+    </div>
+    <div class="hud-grid">
+      <div class="hud-cell"><div class="k">可用保证金</div><div class="v mono" id="hudCash">0</div></div>
+      <div class="hud-cell"><div class="k">必要保证金</div><div class="v mono" id="hudMargin">0</div></div>
+      <div class="hud-cell"><div class="k">維持率</div><div class="v mono" id="hudRate">—</div></div>
+      <div class="hud-cell"><div class="k">负债</div><div class="v mono" id="hudLoan">0</div></div>
+    </div>
+    <div class="margin-bar" id="marginBar"><i></i><b></b></div>
+  </header>
+
+  <!-- 屏幕容器 -->
+  <main id="screens"></main>
+
+  <!-- 底部标签 -->
+  <nav id="tabs"></nav>
+</div>
+
+<!-- 抽屉 -->
+<div class="mask" id="mask"></div>
+<div class="sheet" id="sheet"></div>
+
+<!-- 开场 -->
+<div id="cover">
+  <div class="scanline"></div>
+  <div class="cv-title">FX戦士くるみちゃん<small>TRADING SIMULATOR</small></div>
+  <div class="cv-line"></div>
+  <button class="cv-btn">开始</button>
+  <div style="position:absolute;bottom:calc(20px + env(safe-area-inset-bottom,0px));font-size:9.5px;color:rgba(255,255,255,.28);text-align:center;line-height:1.7">
+    非官方同人作品・全部数据为程序生成<br>本作不含任何真实资金与真实行情
+  </div>
+</div>
+
+<script>/*__JS__*/</script>
+</body>
+</html>
