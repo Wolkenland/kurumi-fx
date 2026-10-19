@@ -277,7 +277,9 @@ kurumi-fx/
 │   └── res/                  # 图标与字符串
 ├── tools/
 │   ├── make-keystore.js      # 生成签名（优先 keytool，兜底纯 Node PKCS#12）
-│   └── build_apk.py          # 纯 Python 的 APK 打包器（自写 AXML 编码 + apksigner）
+│   ├── build_apk.py          # 纯 Python 的 APK 打包器（自写 AXML 编码 + apksigner）
+│   ├── push.sh               # 推送到远程仓库（token 仅进程内使用）
+│   └── ci-build.yml.example  # GitHub Actions 配置模板（复制到 .github/workflows/ 启用）
 ├── test/
 │   ├── headless.js           # 69 项：金融数学、爆仓、借贷、存档、健壮性
 │   ├── static-check.js       # 79 项：DOM id 引用、全局符号、构建产物、机制存在性

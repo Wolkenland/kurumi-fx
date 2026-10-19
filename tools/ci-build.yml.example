@@ -1,3 +1,21 @@
+# ─────────────────────────────────────────────────────────────
+# 这是 GitHub Actions 的 CI 配置「示例」。
+#
+# 为什么不直接放在 .github/workflows/ 里：
+#   GitHub 要求 Personal Access Token 额外具备 workflow scope
+#   才能推送 .github/workflows/ 下的文件。
+#   为了让只有 repo 权限的 token 也能推送整个项目，
+#   这里把它做成手动启用的模板。
+#
+# 启用方法（在网页上两步即可）：
+#   1. 仓库页 → Add file → Create new file
+#   2. 文件名填 .github/workflows/build.yml
+#      内容粘贴本文件全部内容 → Commit changes
+#
+# 启用后每次 push 会自动：跑 409 项测试 → 用标准 Android SDK
+# 打包 APK（能正确生成图标与资源）→ 上传构建产物。
+# ─────────────────────────────────────────────────────────────
+
 name: Build
 
 on:
