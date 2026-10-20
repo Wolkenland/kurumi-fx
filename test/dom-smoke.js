@@ -210,11 +210,14 @@ const $$ = (s) => Array.from(document.querySelectorAll(s));
   if (pause) { click(pause); await sleep(120); chk('暂停生效', pause.classList.contains('on')); }
 
   console.log('\n=== 12. 刷新后恢复存档 ===');
-  const saved = window.localStorage.getItem('fxkurumi.save.v2');
+  const saved = window.localStorage.getItem('fxkurumi.save.slot0') || window.localStorage.getItem('fxkurumi.save.v2');
   chk('存档已写入 localStorage', !!saved, saved ? (saved.length + ' 字节') : '空');
   if (saved) {
-    try { const o = JSON.parse(saved); chk('存档可被解析且含账户数据', !!o.st && typeof o.st.cash === 'number'); }
-    catch (e) { bad('存档无法解析：' + e.message); }
+    try {
+      const w = JSON.parse(saved);
+      const o = (w && w.d) ? JSON.parse(w.d) : w;      // 新格式是 {cs,d,t} 包装
+      chk('存档可被解析且含账户数据', !!o.st && typeof o.st.cash === 'number');
+    } catch (e) { bad('存档无法解析：' + e.message); }
   }
 
   console.log('\n=== 13. 运行时异常汇总 ===');

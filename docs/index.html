@@ -652,39 +652,169 @@ const Sfx = (() => {
   };
 })();
 
-/* ---------------- 本地存储 ---------------- */
+/* ---------------- 本地存储（多槽 + 自动备份 + 元信息） ---------------- */
 const Store = (() => {
   'use strict';
-  const KEY = 'fxkurumi.save.v2';
+  const LEGACY_KEY = 'fxkurumi.save.v2';          // 旧版单槽，读档时自动迁移
+  const SLOT_KEY = n => `fxkurumi.save.slot${n}`;
+  const META_KEY = 'fxkurumi.save.meta';
+  const BACKUP_KEY = 'fxkurumi.save.backup';
+  const SLOTS = 3;
+
   let available = true;
   try {
     localStorage.setItem('__t', '1'); localStorage.removeItem('__t');
   } catch (e) { available = false; }
-
   const memory = {};
+
+  function rawGet(k) {
+    try { return available ? localStorage.getItem(k) : (memory[k] || null); }
+    catch (e) { return memory[k] || null; }
+  }
+  function rawSet(k, v) {
+    try {
+      if (available) localStorage.setItem(k, v); else memory[k] = v;
+      return true;
+    } catch (e) {
+      // 配额超限：尝试清理备份后再写一次
+      try { localStorage.removeItem(BACKUP_KEY); localStorage.setItem(k, v); return true; }
+      catch (e2) { memory[k] = v; return false; }
+    }
+  }
+
+  /** 简易校验，用来发现损坏的存档 */
+  function checksum(str) {
+    let h = 5381;
+    for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
+    return (h >>> 0).toString(36);
+  }
+
+  function readMeta() {
+    try { return JSON.parse(rawGet(META_KEY) || '{}'); } catch (e) { return {}; }
+  }
+  function writeMeta(m) { rawSet(META_KEY, JSON.stringify(m)); }
+
   return {
     available,
-    load() {
-      try {
-        const raw = available ? localStorage.getItem(KEY) : memory[KEY];
+    SLOTS,
+
+    /**
+     * 保存到指定槽
+     * @param obj 存档负载
+     * @param slot 槽位 0..2
+     * @param info 显示用元信息 {day, level, netAsset, chapter}
+     */
+    save(obj, slot, info) {
+      slot = slot | 0;
+      // 先把上一份内容挪到备份（只在写主槽时做，避免反复复制）
+      const prev = rawGet(SLOT_KEY(slot));
+      if (prev && prev.length > 200) rawSet(BACKUP_KEY, prev);
+
+      let raw;
+      try { raw = JSON.stringify(obj); } catch (e) { return false; }
+      const wrapped = JSON.stringify({ cs: checksum(raw), d: raw, t: Date.now() });
+      const ok = rawSet(SLOT_KEY(slot), wrapped);
+
+      const m = readMeta();
+      m[slot] = Object.assign({}, info || {}, {
+        savedAt: Date.now(),
+        size: wrapped.length,
+        ok,
+      });
+      writeMeta(m);
+      return ok;
+    },
+
+    /** 读指定槽；校验失败自动回退备份 */
+    load(slot) {
+      slot = slot | 0;
+      const tryParse = (raw) => {
         if (!raw) return null;
-        return JSON.parse(raw);
-      } catch (e) { return null; }
+        try {
+          const w = JSON.parse(raw);
+          if (!w || !w.d) return null;
+          if (w.cs && checksum(w.d) !== w.cs) return { __corrupt: true };
+          return JSON.parse(w.d);
+        } catch (e) { return { __corrupt: true }; }
+      };
+
+      let r = tryParse(rawGet(SLOT_KEY(slot)));
+      if (r && r.__corrupt) {
+        const b = tryParse(rawGet(BACKUP_KEY));
+        if (b && !b.__corrupt) return Object.assign(b, { __fromBackup: true });
+        return null;
+      }
+      if (r) return r;
+
+      // 迁移：没有多槽存档时，尝试读旧版单槽
+      // 注意：旧格式是「裸 JSON」（没有 {cs,d,t} 包装），不能走 tryParse
+      if (slot === 0) {
+        const raw = rawGet(LEGACY_KEY);
+        if (raw) {
+          try {
+            const o = JSON.parse(raw);
+            if (o && o.st) return Object.assign(o, { __migrated: true });
+            // 万一旧版也被包装过
+            if (o && o.d) {
+              const inner = JSON.parse(o.d);
+              if (inner && inner.st) return Object.assign(inner, { __migrated: true });
+            }
+          } catch (e) { /* 忽略损坏的旧存档 */ }
+        }
+      }
+      return null;
     },
-    save(obj) {
-      try {
-        const raw = JSON.stringify(obj);
-        if (available) localStorage.setItem(KEY, raw); else memory[KEY] = raw;
-        return true;
-      } catch (e) { return false; }
+
+    /** 列出所有槽的元信息（含是否存在、大小、时间） */
+    list() {
+      const m = readMeta();
+      const out = [];
+      for (let i = 0; i < SLOTS; i++) {
+        let info = m[i] || null;
+        if (!info) {
+          // 元信息丢了但存档还在？现场补一个
+          const raw = rawGet(SLOT_KEY(i));
+          if (raw && raw.length > 200) info = { savedAt: null, size: raw.length };
+        }
+        out.push({ slot: i, info });
+      }
+      return out;
     },
+
+    /** 哪个槽是当前使用的 */
+    get active() {
+      const v = rawGet('fxkurumi.save.active');
+      return v === null ? 0 : (+v || 0);
+    },
+    set active(n) { rawSet('fxkurumi.save.active', String(n | 0)); },
+
+    /** 是否存在任何存档 */
+    hasAny() {
+      for (let i = 0; i < SLOTS; i++) if (rawGet(SLOT_KEY(i))) return true;
+      return !!rawGet(LEGACY_KEY);
+    },
+
+    remove(slot) {
+      try { localStorage.removeItem(SLOT_KEY(slot | 0)); } catch (e) { memory[SLOT_KEY(slot | 0)] = undefined; }
+      const m = readMeta(); delete m[slot | 0]; writeMeta(m);
+    },
+
+    hasBackup() { return !!rawGet(BACKUP_KEY); },
+
     clear() {
-      try { if (available) localStorage.removeItem(KEY); else delete memory[KEY]; } catch (e) {}
+      for (let i = 0; i < SLOTS; i++) this.remove(i);
+      try { localStorage.removeItem(LEGACY_KEY); localStorage.removeItem(BACKUP_KEY); localStorage.removeItem(META_KEY); } catch (e) {}
     },
-    raw() { try { return available ? localStorage.getItem(KEY) : memory[KEY]; } catch (e) { return null; } },
-    /** 导出存档为可下载文本 */
-    exportString(obj) { try { return btoa(unescape(encodeURIComponent(JSON.stringify(obj)))); } catch (e) { return ''; } },
-    importString(s) { try { return JSON.parse(decodeURIComponent(escape(atob(s.trim())))); } catch (e) { return null; } }
+
+    /** 导出为可复制的文本 */
+    exportString(obj) {
+      try { return btoa(unescape(encodeURIComponent(JSON.stringify(obj)))); } catch (e) { return ''; }
+    },
+    importString(s) {
+      try { return JSON.parse(decodeURIComponent(escape(atob(String(s).trim())))); } catch (e) { return null; }
+    },
+    /** 导出为 .json 文本（更通用） */
+    exportJson(obj) { try { return JSON.stringify(obj, null, 1); } catch (e) { return ''; } },
   };
 })();
 
@@ -1291,25 +1421,61 @@ class Market {
     this.emit({ type: 'scripted', dir: -dir });
   }
 
+  /**
+   * 紧凑序列化：存档体积从 ~147KB 压到 ~20KB
+   *  · 价格整数化（×1000 保留 3 位小数），浮点数不再存 15 位
+   *  · K 线只留最近 120 根（图表够用），且用 [o,h,l,c] 数组而非对象
+   *  · 不存 label，恢复时按索引重建
+   */
   serialize() {
-    const o = { seed: this.seed, tickCount: this.tickCount, day: this.day, nextNews: this.nextNews, active: this.active, pairs: {} };
+    const KEEP = 120;
+    const ip = v => Math.round(v * 1000);
+    const o = {
+      v: 2,                                   // 序列化格式版本
+      seed: this.seed, tickCount: this.tickCount, day: this.day,
+      nextNews: this.nextNews, active: this.active, pairs: {},
+    };
     for (const id of PAIR_ORDER) {
       const s = this.map[id];
-      o.pairs[id] = { price: s.price, regime: s.regime, trend: s.trend, regimeLeft: s.regimeLeft,
-        bars: s.bars.slice(-260), tickInBar: s.tickInBar, cur: s.cur,
-        rh: s.rangeHigh, rl: s.rangeLow, rnd: null };
+      const bars = s.bars.slice(-KEEP).map(b => [ip(b.o), ip(b.h), ip(b.l), ip(b.c)]);
+      o.pairs[id] = {
+        p: ip(s.price),
+        rg: s.regime, tr: Math.round(s.trend * 1e6), rl: s.regimeLeft,
+        b: bars, tib: s.tickInBar,
+        cur: s.cur ? [ip(s.cur.o), ip(s.cur.h), ip(s.cur.l), ip(s.cur.c)] : null,
+        rh: ip(s.rangeHigh), rlo: ip(s.rangeLow),
+      };
     }
     return o;
   }
   restore(o) {
     if (!o) return;
-    this.tickCount = o.tickCount; this.day = o.day; this.nextNews = o.nextNews; this.active = o.active || this.active;
+    this.tickCount = o.tickCount; this.day = o.day;
+    this.nextNews = o.nextNews; this.active = o.active || this.active;
+    const dp = v => v / 1000;
+    const rebuildLabel = (bars) => bars.forEach((b, i) => {
+      b.label = `${(i % 12) + 1}/${(i % 28) + 1}`;
+    });
+
     for (const id in o.pairs) {
       const s = this.map[id]; if (!s) continue;
       const p = o.pairs[id];
-      s.price = p.price; s.regime = p.regime; s.trend = p.trend; s.regimeLeft = p.regimeLeft;
-      s.bars = p.bars || s.bars; s.tickInBar = p.tickInBar; s.cur = p.cur;
-      s.rangeHigh = p.rh || s.rangeHigh; s.rangeLow = p.rl || s.rangeLow;
+      if (o.v === 2) {
+        // ---- 新紧凑格式 ----
+        s.price = dp(p.p);
+        s.regime = p.rg; s.trend = p.tr / 1e6; s.regimeLeft = p.rl;
+        s.bars = (p.b || []).map(a => ({ o: dp(a[0]), h: dp(a[1]), l: dp(a[2]), c: dp(a[3]), label: '' }));
+        rebuildLabel(s.bars);
+        s.tickInBar = p.tib || 0;
+        s.cur = p.cur ? { o: dp(p.cur[0]), h: dp(p.cur[1]), l: dp(p.cur[2]), c: dp(p.cur[3]), label: '', day: 0 } : null;
+        s.rangeHigh = dp(p.rh); s.rangeLow = dp(p.rlo);
+      } else {
+        // ---- 旧格式（向后兼容）----
+        s.price = p.price; s.regime = p.regime; s.trend = p.trend; s.regimeLeft = p.regimeLeft;
+        s.bars = p.bars || s.bars; s.tickInBar = p.tickInBar; s.cur = p.cur;
+        s.rangeHigh = p.rh || s.rangeHigh; s.rangeLow = p.rl || s.rangeLow;
+        rebuildLabel(s.bars);
+      }
     }
   }
 }
@@ -1422,6 +1588,7 @@ function initialState() {
 class Core {
   constructor() {
     this.agent = false;            // true = 这是一个 AI 玩家，不发声、不存档、不弹窗
+    this.slot = 0;                 // 当前存档槽（0..2）
     this.st = initialState();
     this.market = new Market(this.st.seed);
     this.timers = U.makeTimers();
@@ -1537,26 +1704,58 @@ class Core {
     return ev;
   }
 
-  /* ===== 存档 ===== */
+  /* ===== 存档（多槽 + 备份 + 元信息） ===== */
   save() {
     if (this.agent) return false;   // AI 的账户由主存档统一序列化
     const payload = {
+      v: 2,
       st: this.st,
       market: this.market.serialize(),
       mochiko: this.mochiko,
+      savedAt: Date.now(),
     };
-    Store.save(payload);
+    const info = {
+      day: this.st.date.day,
+      level: this.st.stats.level,
+      netAsset: Math.round(this.netAsset()),
+      cash: Math.round(this.st.cash),
+      loan: Math.round(this.totalLoan()),
+      chapter: this.st.chapter || 0,
+      positions: this.st.positions.length,
+    };
+    return Store.save(payload, this.slot, info);
   }
-  load() {
-    const o = Store.load();
-    if (!o || !o.st) return false;
+
+  /**
+   * 读档
+   * @param slot 不传则读「上次使用的槽」
+   * @returns {ok, fromBackup?, migrated?}
+   */
+  load(slot) {
+    const want = slot === undefined ? Store.active : (slot | 0);
+    const o = Store.load(want);
+    if (!o || !o.st) return { ok: false };
+    this.slot = want;
+    Store.active = want;
     this.st = U.merge(initialState(), o.st);
     this.market = new Market(this.st.seed);
     this.market.restore(o.market);
     this.mochiko = o.mochiko || { mood: 'idle', watched: 0 };
-    return true;
+    return {
+      ok: true,
+      fromBackup: !!o.__fromBackup,
+      migrated: !!o.__migrated,
+      savedAt: o.savedAt || null,
+    };
   }
-  reset() { Store.clear(); this.st = initialState(); this.market = new Market(this.st.seed); }
+
+  /** 切换存档槽（不读档，只是后续保存写到新槽） */
+  useSlot(n) {
+    this.slot = n | 0;
+    Store.active = this.slot;
+  }
+
+  reset() { Store.clear(); this.st = initialState(); this.market = new Market(this.st.seed); this.slot = 0; }
 
   /* ===== 时间推进 ===== */
   start() {
@@ -3349,7 +3548,8 @@ const UI = {
       <div class="kv" data-act="hap"><span class="k">震动反馈</span><span class="v">${s.haptics ? '开' : '关'}</span></div>
       <div class="kv" data-act="fx"><span class="k">特效与动画</span><span class="v">${s.effects ? '开' : '关'}</span></div>
       <div class="kv" data-act="ma"><span class="k">K线均线</span><span class="v">${s.ma ? '开' : '关'}</span></div>
-      <div class="kv" data-act="save"><span class="k">立即存档</span><span class="v">→</span></div>
+      <div class="kv" data-act="slots"><span class="k">📁 存档管理（3 个槽位）</span><span class="v" id="slotState">→</span></div>
+      <div class="kv" data-act="save"><span class="k">立即存档到当前槽</span><span class="v">→</span></div>
       <div class="kv" data-act="tut"><span class="k">重看教学</span><span class="v">→</span></div>
       <div class="kv" data-act="export"><span class="k">导出存档</span><span class="v">→</span></div>
       <div class="kv" data-act="reset"><span class="k" style="color:var(--dn)">重置全部进度</span><span class="v">→</span></div>`;
@@ -3361,6 +3561,7 @@ const UI = {
         else if (a === 'fx') { s.effects = !s.effects; this.effects = s.effects; }
         else if (a === 'ma') { s.ma = !s.ma; this.chart.o.showMA = s.ma; }
         else if (a === 'save') { c.save(); this.toast('已存档', 'up'); }
+        else if (a === 'slots') { Sheets.slots(c); return; }
         else if (a === 'aiconfig') { AIUI.openConfig(); return; }
         else if (a === 'tut') { Sheets.tutorialIndex(c); }
         else if (a === 'export') { Sheets.exportSave(c, this); }
@@ -3372,6 +3573,8 @@ const UI = {
         this.renderSet();
       });
     });
+    const ss = $$('#slotState');
+    if (ss) ss.textContent = '槽 ' + (c.slot + 1) + ' / ' + Store.SLOTS;
     if (typeof AIUI !== 'undefined') AIUI.renderSetRow();
     $$('#aboutCard').innerHTML = `
       <div class="card-title"><span class="dot"></span>关于</div>
@@ -3608,6 +3811,114 @@ const Sheets = {
     $('#shOk', sh).addEventListener('click', () => this.close());
     Haptics[good ? 'win' : 'lose']();
   },
+  /** 存档管理抽屉 */
+  slots(core) {
+    const fmtTime = (ts) => {
+      if (!ts) return '—';
+      const d = new Date(ts);
+      const p2 = n => (n < 10 ? '0' : '') + n;
+      return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+    };
+    const render = () => {
+      const list = Store.list().filter(x => x.slot < Store.SLOTS);
+      const rows = list.map(({ slot, info }) => {
+        const cur = slot === core.slot;
+        const empty = !info;
+        return `<div class="loan-card" style="${cur ? 'border-color:rgba(255,143,177,.55)' : ''}">
+          <div class="bar" style="background:${cur ? 'var(--pink)' : 'rgba(255,255,255,.12)'}"></div>
+          <div class="loan-h">
+            <span class="nm">槽 ${slot + 1}${cur ? '　<span class="tag pink" style="font-size:10px">使用中</span>' : ''}</span>
+            <span class="rt mono" style="font-size:12px;color:var(--tx3)">${empty ? '空' : fmtTime(info.savedAt)}</span>
+          </div>
+          ${empty ? '<div class="loan-desc">还没有存档</div>' : `
+          <div class="loan-desc" style="margin:6px 0">
+            第 <b>${info.day || 0}</b> 天 · Lv.<b>${info.level || 1}</b> ·
+            净值 <b class="mono">${U.yenShort(info.netAsset || 0)}</b> ·
+            ${info.positions || 0} 笔持仓
+            ${info.loan ? ` · 负债 <b style="color:var(--dn)">${U.yenShort(info.loan)}</b>` : ''}
+          </div>
+          <div class="loan-meta"><span>${info.savedAt ? fmtTime(info.savedAt) : '—'}</span><span>${info.size ? (info.size / 1024).toFixed(1) + ' KB' : ''}</span></div>`}
+          <div class="pos-actions" style="margin-top:8px">
+            ${!empty ? `<button class="btn btn-gold btn-sm" data-load="${slot}">读取</button>` : ''}
+            <button class="btn btn-ghost btn-sm" data-save="${slot}">保存到此</button>
+            ${!empty ? `<button class="btn btn-danger btn-sm" data-del="${slot}">删除</button>` : ''}
+          </div>
+        </div>`;
+      }).join('');
+
+      const sh = Sheets.base(`
+        <h3>存档管理</h3>
+        <div class="sub">当前写到 <b>槽 ${core.slot + 1}</b>。每 8 秒自动存一次，读取时若主档损坏会回退到备份。</div>
+        <div id="slotList">${rows}</div>
+        <div class="row" style="margin-top:10px">
+          <button class="btn btn-ghost btn-sm" id="slotExport">导出当前档</button>
+          <button class="btn btn-ghost btn-sm" id="slotImport">导入存档</button>
+        </div>
+        <button class="btn btn-ghost" id="slotClose" style="width:100%;margin-top:8px">关闭</button>`);
+
+      const bind = (sel, fn) => $$$(sel, sh).forEach(b => bindTap(b, () => fn(b)));
+      bind('[data-load]', b => {
+        const n = +b.dataset.load;
+        Confirm.ask('读取槽 ' + (n + 1), '当前未保存的进度会被覆盖。确定读取？', '读取', () => {
+          if (core.load(n).ok) location.reload();
+          else UI.toast('这个槽没有可用存档', 'dn');
+        });
+      });
+      bind('[data-save]', b => {
+        const n = +b.dataset.save;
+        core.useSlot(n);
+        core.save();
+        UI.toast('已保存到槽 ' + (n + 1), 'up');
+        UI.renderSet();
+        render();
+      });
+      bind('[data-del]', b => {
+        const n = +b.dataset.del;
+        Confirm.ask('删除槽 ' + (n + 1), '这个槽的存档会被清空，不可恢复。', '删除', () => {
+          Store.remove(n);
+          UI.toast('已删除槽 ' + (n + 1), 'dn');
+          render();
+        });
+      });
+      $$('#slotClose', sh).addEventListener('click', () => Sheets.close());
+      $$('#slotExport', sh).addEventListener('click', () => {
+        const txt = Store.exportJson({ st: core.st, market: core.market.serialize(), mochiko: core.mochiko });
+        const ta = el('textarea', '', '');
+        ta.value = txt;
+        ta.style.cssText = 'width:100%;height:140px;margin-top:8px;border-radius:10px;background:rgba(0,0,0,.45);' +
+          'border:1px solid rgba(255,255,255,.18);color:var(--tx);padding:10px;font-size:10.5px;font-family:ui-monospace,monospace';
+        ta.readOnly = true;
+        const wrap = $$('#slotList', sh);
+        wrap.innerHTML = '';
+        wrap.appendChild(el('div', 'sub', '复制下面全部文本保存起来：'));
+        wrap.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); UI.toast('已复制到剪贴板', 'up'); } catch (e) {}
+      });
+      $$('#slotImport', sh).addEventListener('click', () => {
+        const ta = el('textarea', '');
+        ta.style.cssText = 'width:100%;height:140px;margin-top:8px;border-radius:10px;background:rgba(0,0,0,.45);' +
+          'border:1px solid rgba(255,255,255,.18);color:var(--tx);padding:10px;font-size:10.5px;font-family:ui-monospace,monospace';
+        ta.placeholder = '把存档文本粘贴到这里';
+        const wrap = $$('#slotList', sh);
+        wrap.innerHTML = '';
+        wrap.appendChild(ta);
+        const btn = el('button', 'btn btn-gold btn-sm', '导入到当前槽');
+        btn.style.marginTop = '8px';
+        wrap.appendChild(btn);
+        bindTap(btn, () => {
+          let o = null;
+          try { o = JSON.parse(ta.value); } catch (e) { o = Store.importString(ta.value); }
+          if (!o || !o.st) { UI.toast('这不是有效的存档', 'dn'); return; }
+          Store.save(o, core.slot, { day: (o.st.date || {}).day || 0, level: (o.st.stats || {}).level || 1 });
+          UI.toast('导入成功，正在重新加载', 'up');
+          setTimeout(() => location.reload(), 600);
+        });
+      });
+    };
+    render();
+  },
+
   exportSave(core, ui) {
     const s = Store.exportString({ st: core.st, market: core.market.serialize(), mochiko: core.mochiko });
     const sh = this.base(`
@@ -5215,7 +5526,7 @@ const AIUI = (() => {
 
   function boot() {
     core = new Core();
-    const had = core.load();
+    const had = core.load();          // 返回 {ok, fromBackup?, migrated?}
 
     ui = UI;
     ui.init(core);
@@ -5249,10 +5560,12 @@ const AIUI = (() => {
     window.__FXK__ = { core, ui, Tutorials, Chapters, AIUI, AIPlayer, LLM, version: '1.2.0' };
 
     // 序章
-    if (had && had.st && (had.st.stats.daysPlayed > 0 || had.st.stats.level > 1)) {
+    if (had.ok && (core.st.stats.daysPlayed > 0 || core.st.stats.level > 1)) {
       // 读档：直接进入
       hideCover();
-      UI.toast('已读取存档', 'up');
+      if (had.fromBackup) UI.toast('主存档损坏，已从备份恢复', 'dn');
+      else if (had.migrated) UI.toast('旧版存档已自动迁移', 'up');
+      else UI.toast('已读取存档 · 第 ' + core.st.date.day + ' 天', 'up');
       Chapters.begin();
     } else {
       showCover();

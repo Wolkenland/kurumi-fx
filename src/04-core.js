@@ -103,6 +103,7 @@ function initialState() {
 class Core {
   constructor() {
     this.agent = false;            // true = 这是一个 AI 玩家，不发声、不存档、不弹窗
+    this.slot = 0;                 // 当前存档槽（0..2）
     this.st = initialState();
     this.market = new Market(this.st.seed);
     this.timers = U.makeTimers();
@@ -218,26 +219,58 @@ class Core {
     return ev;
   }
 
-  /* ===== 存档 ===== */
+  /* ===== 存档（多槽 + 备份 + 元信息） ===== */
   save() {
     if (this.agent) return false;   // AI 的账户由主存档统一序列化
     const payload = {
+      v: 2,
       st: this.st,
       market: this.market.serialize(),
       mochiko: this.mochiko,
+      savedAt: Date.now(),
     };
-    Store.save(payload);
+    const info = {
+      day: this.st.date.day,
+      level: this.st.stats.level,
+      netAsset: Math.round(this.netAsset()),
+      cash: Math.round(this.st.cash),
+      loan: Math.round(this.totalLoan()),
+      chapter: this.st.chapter || 0,
+      positions: this.st.positions.length,
+    };
+    return Store.save(payload, this.slot, info);
   }
-  load() {
-    const o = Store.load();
-    if (!o || !o.st) return false;
+
+  /**
+   * 读档
+   * @param slot 不传则读「上次使用的槽」
+   * @returns {ok, fromBackup?, migrated?}
+   */
+  load(slot) {
+    const want = slot === undefined ? Store.active : (slot | 0);
+    const o = Store.load(want);
+    if (!o || !o.st) return { ok: false };
+    this.slot = want;
+    Store.active = want;
     this.st = U.merge(initialState(), o.st);
     this.market = new Market(this.st.seed);
     this.market.restore(o.market);
     this.mochiko = o.mochiko || { mood: 'idle', watched: 0 };
-    return true;
+    return {
+      ok: true,
+      fromBackup: !!o.__fromBackup,
+      migrated: !!o.__migrated,
+      savedAt: o.savedAt || null,
+    };
   }
-  reset() { Store.clear(); this.st = initialState(); this.market = new Market(this.st.seed); }
+
+  /** 切换存档槽（不读档，只是后续保存写到新槽） */
+  useSlot(n) {
+    this.slot = n | 0;
+    Store.active = this.slot;
+  }
+
+  reset() { Store.clear(); this.st = initialState(); this.market = new Market(this.st.seed); this.slot = 0; }
 
   /* ===== 时间推进 ===== */
   start() {

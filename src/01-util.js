@@ -206,38 +206,168 @@ const Sfx = (() => {
   };
 })();
 
-/* ---------------- 本地存储 ---------------- */
+/* ---------------- 本地存储（多槽 + 自动备份 + 元信息） ---------------- */
 const Store = (() => {
   'use strict';
-  const KEY = 'fxkurumi.save.v2';
+  const LEGACY_KEY = 'fxkurumi.save.v2';          // 旧版单槽，读档时自动迁移
+  const SLOT_KEY = n => `fxkurumi.save.slot${n}`;
+  const META_KEY = 'fxkurumi.save.meta';
+  const BACKUP_KEY = 'fxkurumi.save.backup';
+  const SLOTS = 3;
+
   let available = true;
   try {
     localStorage.setItem('__t', '1'); localStorage.removeItem('__t');
   } catch (e) { available = false; }
-
   const memory = {};
+
+  function rawGet(k) {
+    try { return available ? localStorage.getItem(k) : (memory[k] || null); }
+    catch (e) { return memory[k] || null; }
+  }
+  function rawSet(k, v) {
+    try {
+      if (available) localStorage.setItem(k, v); else memory[k] = v;
+      return true;
+    } catch (e) {
+      // 配额超限：尝试清理备份后再写一次
+      try { localStorage.removeItem(BACKUP_KEY); localStorage.setItem(k, v); return true; }
+      catch (e2) { memory[k] = v; return false; }
+    }
+  }
+
+  /** 简易校验，用来发现损坏的存档 */
+  function checksum(str) {
+    let h = 5381;
+    for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
+    return (h >>> 0).toString(36);
+  }
+
+  function readMeta() {
+    try { return JSON.parse(rawGet(META_KEY) || '{}'); } catch (e) { return {}; }
+  }
+  function writeMeta(m) { rawSet(META_KEY, JSON.stringify(m)); }
+
   return {
     available,
-    load() {
-      try {
-        const raw = available ? localStorage.getItem(KEY) : memory[KEY];
+    SLOTS,
+
+    /**
+     * 保存到指定槽
+     * @param obj 存档负载
+     * @param slot 槽位 0..2
+     * @param info 显示用元信息 {day, level, netAsset, chapter}
+     */
+    save(obj, slot, info) {
+      slot = slot | 0;
+      // 先把上一份内容挪到备份（只在写主槽时做，避免反复复制）
+      const prev = rawGet(SLOT_KEY(slot));
+      if (prev && prev.length > 200) rawSet(BACKUP_KEY, prev);
+
+      let raw;
+      try { raw = JSON.stringify(obj); } catch (e) { return false; }
+      const wrapped = JSON.stringify({ cs: checksum(raw), d: raw, t: Date.now() });
+      const ok = rawSet(SLOT_KEY(slot), wrapped);
+
+      const m = readMeta();
+      m[slot] = Object.assign({}, info || {}, {
+        savedAt: Date.now(),
+        size: wrapped.length,
+        ok,
+      });
+      writeMeta(m);
+      return ok;
+    },
+
+    /** 读指定槽；校验失败自动回退备份 */
+    load(slot) {
+      slot = slot | 0;
+      const tryParse = (raw) => {
         if (!raw) return null;
-        return JSON.parse(raw);
-      } catch (e) { return null; }
+        try {
+          const w = JSON.parse(raw);
+          if (!w || !w.d) return null;
+          if (w.cs && checksum(w.d) !== w.cs) return { __corrupt: true };
+          return JSON.parse(w.d);
+        } catch (e) { return { __corrupt: true }; }
+      };
+
+      let r = tryParse(rawGet(SLOT_KEY(slot)));
+      if (r && r.__corrupt) {
+        const b = tryParse(rawGet(BACKUP_KEY));
+        if (b && !b.__corrupt) return Object.assign(b, { __fromBackup: true });
+        return null;
+      }
+      if (r) return r;
+
+      // 迁移：没有多槽存档时，尝试读旧版单槽
+      // 注意：旧格式是「裸 JSON」（没有 {cs,d,t} 包装），不能走 tryParse
+      if (slot === 0) {
+        const raw = rawGet(LEGACY_KEY);
+        if (raw) {
+          try {
+            const o = JSON.parse(raw);
+            if (o && o.st) return Object.assign(o, { __migrated: true });
+            // 万一旧版也被包装过
+            if (o && o.d) {
+              const inner = JSON.parse(o.d);
+              if (inner && inner.st) return Object.assign(inner, { __migrated: true });
+            }
+          } catch (e) { /* 忽略损坏的旧存档 */ }
+        }
+      }
+      return null;
     },
-    save(obj) {
-      try {
-        const raw = JSON.stringify(obj);
-        if (available) localStorage.setItem(KEY, raw); else memory[KEY] = raw;
-        return true;
-      } catch (e) { return false; }
+
+    /** 列出所有槽的元信息（含是否存在、大小、时间） */
+    list() {
+      const m = readMeta();
+      const out = [];
+      for (let i = 0; i < SLOTS; i++) {
+        let info = m[i] || null;
+        if (!info) {
+          // 元信息丢了但存档还在？现场补一个
+          const raw = rawGet(SLOT_KEY(i));
+          if (raw && raw.length > 200) info = { savedAt: null, size: raw.length };
+        }
+        out.push({ slot: i, info });
+      }
+      return out;
     },
+
+    /** 哪个槽是当前使用的 */
+    get active() {
+      const v = rawGet('fxkurumi.save.active');
+      return v === null ? 0 : (+v || 0);
+    },
+    set active(n) { rawSet('fxkurumi.save.active', String(n | 0)); },
+
+    /** 是否存在任何存档 */
+    hasAny() {
+      for (let i = 0; i < SLOTS; i++) if (rawGet(SLOT_KEY(i))) return true;
+      return !!rawGet(LEGACY_KEY);
+    },
+
+    remove(slot) {
+      try { localStorage.removeItem(SLOT_KEY(slot | 0)); } catch (e) { memory[SLOT_KEY(slot | 0)] = undefined; }
+      const m = readMeta(); delete m[slot | 0]; writeMeta(m);
+    },
+
+    hasBackup() { return !!rawGet(BACKUP_KEY); },
+
     clear() {
-      try { if (available) localStorage.removeItem(KEY); else delete memory[KEY]; } catch (e) {}
+      for (let i = 0; i < SLOTS; i++) this.remove(i);
+      try { localStorage.removeItem(LEGACY_KEY); localStorage.removeItem(BACKUP_KEY); localStorage.removeItem(META_KEY); } catch (e) {}
     },
-    raw() { try { return available ? localStorage.getItem(KEY) : memory[KEY]; } catch (e) { return null; } },
-    /** 导出存档为可下载文本 */
-    exportString(obj) { try { return btoa(unescape(encodeURIComponent(JSON.stringify(obj)))); } catch (e) { return ''; } },
-    importString(s) { try { return JSON.parse(decodeURIComponent(escape(atob(s.trim())))); } catch (e) { return null; } }
+
+    /** 导出为可复制的文本 */
+    exportString(obj) {
+      try { return btoa(unescape(encodeURIComponent(JSON.stringify(obj)))); } catch (e) { return ''; }
+    },
+    importString(s) {
+      try { return JSON.parse(decodeURIComponent(escape(atob(String(s).trim())))); } catch (e) { return null; }
+    },
+    /** 导出为 .json 文本（更通用） */
+    exportJson(obj) { try { return JSON.stringify(obj, null, 1); } catch (e) { return ''; } },
   };
 })();

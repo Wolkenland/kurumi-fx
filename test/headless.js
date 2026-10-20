@@ -296,8 +296,14 @@ console.log('\n=== 10. 存档 / 读档一致性 ===');
   c2.market.restore(blob.market);
   t('读档后现金一致', near(c2.st.cash, snap.cash, 0.001));
   t('读档后持仓数一致', c2.st.positions.length === snap.pos);
-  t('读档后价格一致', near(c2.market.pair('EURJPY').price, snap.price, 1e-9));
-  t('读档后 K 线数量一致', c2.market.pair('EURJPY').bars.length === snap.bars);
+  // 紧凑序列化把价格整数化（×1000），会有 <0.001 的量化误差
+  t('读档后价格一致（量化误差 <0.002）',
+    Math.abs(c2.market.pair('EURJPY').price - snap.price) < 0.002,
+    `${snap.price.toFixed(4)} vs ${c2.market.pair('EURJPY').price.toFixed(4)}`);
+  // 存档只保留最近 120 根（体积压缩），读档后不应超过这个数
+  t('读档后 K 线保留在 120 根以内',
+    c2.market.pair('EURJPY').bars.length <= 120 && c2.market.pair('EURJPY').bars.length > 0,
+    `${snap.bars} → ${c2.market.pair('EURJPY').bars.length}`);
   t('读档前确实还有持仓（否则这项测不到东西）', c.st.positions.length === 1,
     'positions=' + c.st.positions.length);
   t('读档后维持率一致', near(c2.marginRate(), snap.rate, 0.01),

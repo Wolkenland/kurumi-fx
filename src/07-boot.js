@@ -12,7 +12,7 @@
 
   function boot() {
     core = new Core();
-    const had = core.load();
+    const had = core.load();          // 返回 {ok, fromBackup?, migrated?}
 
     ui = UI;
     ui.init(core);
@@ -46,10 +46,12 @@
     window.__FXK__ = { core, ui, Tutorials, Chapters, AIUI, AIPlayer, LLM, version: '1.2.0' };
 
     // 序章
-    if (had && had.st && (had.st.stats.daysPlayed > 0 || had.st.stats.level > 1)) {
+    if (had.ok && (core.st.stats.daysPlayed > 0 || core.st.stats.level > 1)) {
       // 读档：直接进入
       hideCover();
-      UI.toast('已读取存档', 'up');
+      if (had.fromBackup) UI.toast('主存档损坏，已从备份恢复', 'dn');
+      else if (had.migrated) UI.toast('旧版存档已自动迁移', 'up');
+      else UI.toast('已读取存档 · 第 ' + core.st.date.day + ' 天', 'up');
       Chapters.begin();
     } else {
       showCover();

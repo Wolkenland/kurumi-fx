@@ -288,25 +288,61 @@ class Market {
     this.emit({ type: 'scripted', dir: -dir });
   }
 
+  /**
+   * 紧凑序列化：存档体积从 ~147KB 压到 ~20KB
+   *  · 价格整数化（×1000 保留 3 位小数），浮点数不再存 15 位
+   *  · K 线只留最近 120 根（图表够用），且用 [o,h,l,c] 数组而非对象
+   *  · 不存 label，恢复时按索引重建
+   */
   serialize() {
-    const o = { seed: this.seed, tickCount: this.tickCount, day: this.day, nextNews: this.nextNews, active: this.active, pairs: {} };
+    const KEEP = 120;
+    const ip = v => Math.round(v * 1000);
+    const o = {
+      v: 2,                                   // 序列化格式版本
+      seed: this.seed, tickCount: this.tickCount, day: this.day,
+      nextNews: this.nextNews, active: this.active, pairs: {},
+    };
     for (const id of PAIR_ORDER) {
       const s = this.map[id];
-      o.pairs[id] = { price: s.price, regime: s.regime, trend: s.trend, regimeLeft: s.regimeLeft,
-        bars: s.bars.slice(-260), tickInBar: s.tickInBar, cur: s.cur,
-        rh: s.rangeHigh, rl: s.rangeLow, rnd: null };
+      const bars = s.bars.slice(-KEEP).map(b => [ip(b.o), ip(b.h), ip(b.l), ip(b.c)]);
+      o.pairs[id] = {
+        p: ip(s.price),
+        rg: s.regime, tr: Math.round(s.trend * 1e6), rl: s.regimeLeft,
+        b: bars, tib: s.tickInBar,
+        cur: s.cur ? [ip(s.cur.o), ip(s.cur.h), ip(s.cur.l), ip(s.cur.c)] : null,
+        rh: ip(s.rangeHigh), rlo: ip(s.rangeLow),
+      };
     }
     return o;
   }
   restore(o) {
     if (!o) return;
-    this.tickCount = o.tickCount; this.day = o.day; this.nextNews = o.nextNews; this.active = o.active || this.active;
+    this.tickCount = o.tickCount; this.day = o.day;
+    this.nextNews = o.nextNews; this.active = o.active || this.active;
+    const dp = v => v / 1000;
+    const rebuildLabel = (bars) => bars.forEach((b, i) => {
+      b.label = `${(i % 12) + 1}/${(i % 28) + 1}`;
+    });
+
     for (const id in o.pairs) {
       const s = this.map[id]; if (!s) continue;
       const p = o.pairs[id];
-      s.price = p.price; s.regime = p.regime; s.trend = p.trend; s.regimeLeft = p.regimeLeft;
-      s.bars = p.bars || s.bars; s.tickInBar = p.tickInBar; s.cur = p.cur;
-      s.rangeHigh = p.rh || s.rangeHigh; s.rangeLow = p.rl || s.rangeLow;
+      if (o.v === 2) {
+        // ---- 新紧凑格式 ----
+        s.price = dp(p.p);
+        s.regime = p.rg; s.trend = p.tr / 1e6; s.regimeLeft = p.rl;
+        s.bars = (p.b || []).map(a => ({ o: dp(a[0]), h: dp(a[1]), l: dp(a[2]), c: dp(a[3]), label: '' }));
+        rebuildLabel(s.bars);
+        s.tickInBar = p.tib || 0;
+        s.cur = p.cur ? { o: dp(p.cur[0]), h: dp(p.cur[1]), l: dp(p.cur[2]), c: dp(p.cur[3]), label: '', day: 0 } : null;
+        s.rangeHigh = dp(p.rh); s.rangeLow = dp(p.rlo);
+      } else {
+        // ---- 旧格式（向后兼容）----
+        s.price = p.price; s.regime = p.regime; s.trend = p.trend; s.regimeLeft = p.regimeLeft;
+        s.bars = p.bars || s.bars; s.tickInBar = p.tickInBar; s.cur = p.cur;
+        s.rangeHigh = p.rh || s.rangeHigh; s.rangeLow = p.rl || s.rangeLow;
+        rebuildLabel(s.bars);
+      }
     }
   }
 }

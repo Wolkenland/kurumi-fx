@@ -987,7 +987,8 @@ const UI = {
       <div class="kv" data-act="hap"><span class="k">震动反馈</span><span class="v">${s.haptics ? '开' : '关'}</span></div>
       <div class="kv" data-act="fx"><span class="k">特效与动画</span><span class="v">${s.effects ? '开' : '关'}</span></div>
       <div class="kv" data-act="ma"><span class="k">K线均线</span><span class="v">${s.ma ? '开' : '关'}</span></div>
-      <div class="kv" data-act="save"><span class="k">立即存档</span><span class="v">→</span></div>
+      <div class="kv" data-act="slots"><span class="k">📁 存档管理（3 个槽位）</span><span class="v" id="slotState">→</span></div>
+      <div class="kv" data-act="save"><span class="k">立即存档到当前槽</span><span class="v">→</span></div>
       <div class="kv" data-act="tut"><span class="k">重看教学</span><span class="v">→</span></div>
       <div class="kv" data-act="export"><span class="k">导出存档</span><span class="v">→</span></div>
       <div class="kv" data-act="reset"><span class="k" style="color:var(--dn)">重置全部进度</span><span class="v">→</span></div>`;
@@ -999,6 +1000,7 @@ const UI = {
         else if (a === 'fx') { s.effects = !s.effects; this.effects = s.effects; }
         else if (a === 'ma') { s.ma = !s.ma; this.chart.o.showMA = s.ma; }
         else if (a === 'save') { c.save(); this.toast('已存档', 'up'); }
+        else if (a === 'slots') { Sheets.slots(c); return; }
         else if (a === 'aiconfig') { AIUI.openConfig(); return; }
         else if (a === 'tut') { Sheets.tutorialIndex(c); }
         else if (a === 'export') { Sheets.exportSave(c, this); }
@@ -1010,6 +1012,8 @@ const UI = {
         this.renderSet();
       });
     });
+    const ss = $$('#slotState');
+    if (ss) ss.textContent = '槽 ' + (c.slot + 1) + ' / ' + Store.SLOTS;
     if (typeof AIUI !== 'undefined') AIUI.renderSetRow();
     $$('#aboutCard').innerHTML = `
       <div class="card-title"><span class="dot"></span>关于</div>
@@ -1246,6 +1250,114 @@ const Sheets = {
     $('#shOk', sh).addEventListener('click', () => this.close());
     Haptics[good ? 'win' : 'lose']();
   },
+  /** 存档管理抽屉 */
+  slots(core) {
+    const fmtTime = (ts) => {
+      if (!ts) return '—';
+      const d = new Date(ts);
+      const p2 = n => (n < 10 ? '0' : '') + n;
+      return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+    };
+    const render = () => {
+      const list = Store.list().filter(x => x.slot < Store.SLOTS);
+      const rows = list.map(({ slot, info }) => {
+        const cur = slot === core.slot;
+        const empty = !info;
+        return `<div class="loan-card" style="${cur ? 'border-color:rgba(255,143,177,.55)' : ''}">
+          <div class="bar" style="background:${cur ? 'var(--pink)' : 'rgba(255,255,255,.12)'}"></div>
+          <div class="loan-h">
+            <span class="nm">槽 ${slot + 1}${cur ? '　<span class="tag pink" style="font-size:10px">使用中</span>' : ''}</span>
+            <span class="rt mono" style="font-size:12px;color:var(--tx3)">${empty ? '空' : fmtTime(info.savedAt)}</span>
+          </div>
+          ${empty ? '<div class="loan-desc">还没有存档</div>' : `
+          <div class="loan-desc" style="margin:6px 0">
+            第 <b>${info.day || 0}</b> 天 · Lv.<b>${info.level || 1}</b> ·
+            净值 <b class="mono">${U.yenShort(info.netAsset || 0)}</b> ·
+            ${info.positions || 0} 笔持仓
+            ${info.loan ? ` · 负债 <b style="color:var(--dn)">${U.yenShort(info.loan)}</b>` : ''}
+          </div>
+          <div class="loan-meta"><span>${info.savedAt ? fmtTime(info.savedAt) : '—'}</span><span>${info.size ? (info.size / 1024).toFixed(1) + ' KB' : ''}</span></div>`}
+          <div class="pos-actions" style="margin-top:8px">
+            ${!empty ? `<button class="btn btn-gold btn-sm" data-load="${slot}">读取</button>` : ''}
+            <button class="btn btn-ghost btn-sm" data-save="${slot}">保存到此</button>
+            ${!empty ? `<button class="btn btn-danger btn-sm" data-del="${slot}">删除</button>` : ''}
+          </div>
+        </div>`;
+      }).join('');
+
+      const sh = Sheets.base(`
+        <h3>存档管理</h3>
+        <div class="sub">当前写到 <b>槽 ${core.slot + 1}</b>。每 8 秒自动存一次，读取时若主档损坏会回退到备份。</div>
+        <div id="slotList">${rows}</div>
+        <div class="row" style="margin-top:10px">
+          <button class="btn btn-ghost btn-sm" id="slotExport">导出当前档</button>
+          <button class="btn btn-ghost btn-sm" id="slotImport">导入存档</button>
+        </div>
+        <button class="btn btn-ghost" id="slotClose" style="width:100%;margin-top:8px">关闭</button>`);
+
+      const bind = (sel, fn) => $$$(sel, sh).forEach(b => bindTap(b, () => fn(b)));
+      bind('[data-load]', b => {
+        const n = +b.dataset.load;
+        Confirm.ask('读取槽 ' + (n + 1), '当前未保存的进度会被覆盖。确定读取？', '读取', () => {
+          if (core.load(n).ok) location.reload();
+          else UI.toast('这个槽没有可用存档', 'dn');
+        });
+      });
+      bind('[data-save]', b => {
+        const n = +b.dataset.save;
+        core.useSlot(n);
+        core.save();
+        UI.toast('已保存到槽 ' + (n + 1), 'up');
+        UI.renderSet();
+        render();
+      });
+      bind('[data-del]', b => {
+        const n = +b.dataset.del;
+        Confirm.ask('删除槽 ' + (n + 1), '这个槽的存档会被清空，不可恢复。', '删除', () => {
+          Store.remove(n);
+          UI.toast('已删除槽 ' + (n + 1), 'dn');
+          render();
+        });
+      });
+      $$('#slotClose', sh).addEventListener('click', () => Sheets.close());
+      $$('#slotExport', sh).addEventListener('click', () => {
+        const txt = Store.exportJson({ st: core.st, market: core.market.serialize(), mochiko: core.mochiko });
+        const ta = el('textarea', '', '');
+        ta.value = txt;
+        ta.style.cssText = 'width:100%;height:140px;margin-top:8px;border-radius:10px;background:rgba(0,0,0,.45);' +
+          'border:1px solid rgba(255,255,255,.18);color:var(--tx);padding:10px;font-size:10.5px;font-family:ui-monospace,monospace';
+        ta.readOnly = true;
+        const wrap = $$('#slotList', sh);
+        wrap.innerHTML = '';
+        wrap.appendChild(el('div', 'sub', '复制下面全部文本保存起来：'));
+        wrap.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); UI.toast('已复制到剪贴板', 'up'); } catch (e) {}
+      });
+      $$('#slotImport', sh).addEventListener('click', () => {
+        const ta = el('textarea', '');
+        ta.style.cssText = 'width:100%;height:140px;margin-top:8px;border-radius:10px;background:rgba(0,0,0,.45);' +
+          'border:1px solid rgba(255,255,255,.18);color:var(--tx);padding:10px;font-size:10.5px;font-family:ui-monospace,monospace';
+        ta.placeholder = '把存档文本粘贴到这里';
+        const wrap = $$('#slotList', sh);
+        wrap.innerHTML = '';
+        wrap.appendChild(ta);
+        const btn = el('button', 'btn btn-gold btn-sm', '导入到当前槽');
+        btn.style.marginTop = '8px';
+        wrap.appendChild(btn);
+        bindTap(btn, () => {
+          let o = null;
+          try { o = JSON.parse(ta.value); } catch (e) { o = Store.importString(ta.value); }
+          if (!o || !o.st) { UI.toast('这不是有效的存档', 'dn'); return; }
+          Store.save(o, core.slot, { day: (o.st.date || {}).day || 0, level: (o.st.stats || {}).level || 1 });
+          UI.toast('导入成功，正在重新加载', 'up');
+          setTimeout(() => location.reload(), 600);
+        });
+      });
+    };
+    render();
+  },
+
   exportSave(core, ui) {
     const s = Store.exportString({ st: core.st, market: core.market.serialize(), mochiko: core.mochiko });
     const sh = this.base(`
