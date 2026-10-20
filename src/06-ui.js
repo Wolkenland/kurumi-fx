@@ -653,7 +653,16 @@ const UI = {
       }
       case 'levelup': {
         Sfx.bigwin();
-        Sheets.msg('LEVEL UP', `交易者等级提升到 <b style="color:var(--gold)">Lv.${ev.level}</b><br><span style="font-size:11.5px;color:var(--tx2)">${ev.why || '经验来自每一次真实的盈亏。'}</span>`);
+        Sheets.msg('LEVEL UP',
+          `交易者等级提升到 <b style="color:var(--gold)">Lv.${ev.level}</b><br>
+           <div style="margin-top:10px;padding:9px 11px;border-radius:10px;
+             background:rgba(255,209,102,.10);border:1px solid rgba(255,209,102,.3);
+             font-size:12px;line-height:1.7">
+             🎁 获得 <b style="color:var(--gold)">${ev.gained || 1} 点洞察</b>（可换 10 万，或买永久技能）<br>
+             
+             <span style="font-size:11px;color:var(--tx2)">强平线已降至 ${this.core.liqThreshold().toFixed(1)}%</span>
+           </div>
+           <div style="font-size:11px;color:var(--tx3);margin-top:6px">${ev.why || '经验来自每一次真实的盈亏。'}</div>`);
         break;
       }
       case 'bark': FX.bark(ev.who, ev.line); break;
@@ -719,7 +728,7 @@ const UI = {
       const pnl = c.unrealized(p);
       const pips = (c.evalPrice(p) - p.entry) * p.dir / s.def.pip;
       const margin = p.units * (p.entry / p.lev);
-      const lossPct = U.clamp(-pnl / (margin * 0.5) * 100, 0, 100);
+      const lossPct = U.clamp(-pnl / (margin * c.liqThreshold() / 100) * 100, 0, 100);
       const node = el('div', 'pos ' + (p.dir > 0 ? 'long' : 'short'), `
         <div class="pos-head">
           <span class="pair" style="color:${s.def.color}">${s.def.short}</span>
@@ -778,7 +787,7 @@ const UI = {
       if (g[1]) g[1].textContent = c.evalPrice(p).toFixed(s.def.digits);
       if (g[3]) g[3].textContent = U.sfmt((c.evalPrice(p) - p.entry) * p.dir / s.def.pip, 1);
       const margin = p.units * (p.entry / p.lev);
-      const lossPct = U.clamp(-pnl / (margin * 0.5) * 100, 0, 100);
+      const lossPct = U.clamp(-pnl / (margin * c.liqThreshold() / 100) * 100, 0, 100);
       const bar = $('.pos-bar i', n);
       if (bar) bar.style.width = lossPct + '%';
     });
@@ -899,7 +908,17 @@ const UI = {
         <div class="heart" style="margin-top:6px"><span style="width:44px">洞察</span><div class="bar"><i style="width:${st.stats.insight}%;background:var(--blue)"></i></div><span class="mono" style="color:var(--blue)">${st.stats.insight.toFixed(0)}</span></div>
       </div>
       <div style="margin-top:10px;font-size:11px;color:var(--tx3);line-height:1.6">
-        冷静值越低，越容易做出"再加仓一点"的决定；贪欲越高，杠杆会越抬越高。洞察来自每一次真实的盈亏。
+        冷静值越低，越容易做出"再加仓一点"的决定；贪欲越高，杠杆会越抬越高。
+      </div>
+      <div style="margin-top:10px;padding:9px 11px;border-radius:11px;
+        background:rgba(140,180,255,.07);border:1px solid rgba(140,180,255,.22);font-size:11px;line-height:1.72">
+        <b style="color:var(--blue)">等级有什么用</b><br>
+        · 每升 1 级 → <b style="color:var(--gold)">+1 洞察点</b>（可换 10 万 / 买技能）<br>
+        · 每升 1 级 → <b>强平线 −0.7%</b>（50% → 最低 40%）<br>
+        · Lv.2 解锁「消費者金融」借贷<br>
+        · Lv.2 / Lv.3 触发关键剧情<br>
+        <span style="color:var(--tx3)">当前强平线：<b style="color:${c.liqThreshold() < 48 ? 'var(--up)' : 'var(--tx2)'}">${c.liqThreshold().toFixed(1)}%</b>
+        · 下一级需要 <b>${Math.ceil(c.xpNeed())}</b> 经验</span>
       </div>`;
 
     // 目标

@@ -448,7 +448,7 @@ class Core {
 
     const usedMargin = marginOverride === undefined ? this.usedMargin() : marginOverride;
     const eq = eqOverride === undefined ? this.equity() : eqOverride;
-    const lossAvail = eq - usedMargin * 0.5;
+    const lossAvail = eq - usedMargin * (this.liqThreshold() / 100);
     if (lossAvail <= 0) return s.price;                       // 现在就已经在爆仓边缘
     const curThis = ps.reduce((a, p) => a + this.unrealized(p), 0);
     const bearable = curThis + lossAvail;                     // 该品种可再承受的亏损
@@ -469,7 +469,7 @@ class Core {
   checkRisk() {
     if (!this.hasPosition()) { this.marginCall = null; return; }
     const rate = this.marginRate();
-    if (rate <= 50) {
+    if (rate <= this.liqThreshold()) {
       // 全部强平
       const list = this.st.positions.slice().sort((a, b) => this.unrealized(a) - this.unrealized(b));
       this.emit('liquidateBegin', {});
@@ -481,7 +481,8 @@ class Core {
       this.save();
       return;
     }
-    if (rate <= 100 && (!this.marginCall || this.marginCall.level !== 1)) {
+    const callLine = Math.max(92, 100 - (this.st.stats.level - 1) * 0.8);
+    if (rate <= callLine && (!this.marginCall || this.marginCall.level !== 1)) {
       this.marginCall = { level: 1, rate };
       this.fx('alarm'); this.hap('lose');
       this.emit('margincall', { level: 1, rate });
@@ -597,16 +598,34 @@ class Core {
   }
 
   /* ===== 经验 / 成就 ===== */
+  /** 升级所需经验 */
+  xpNeed(lv) { return 100 + ((lv || this.st.stats.level) - 1) * 85; }
+
   addXp(n, why) {
     this.st.stats.xp += n;
-    const need = 100 + (this.st.stats.level - 1) * 85;
-    if (this.st.stats.xp >= need) {
-      this.st.stats.xp -= need;
+    let leveled = 0;
+    // 一次可能连升多级
+    while (this.st.stats.xp >= this.xpNeed()) {
+      this.st.stats.xp -= this.xpNeed();
       this.st.stats.level++;
       this.st.stats.insight = Math.min(100, this.st.stats.insight + 4);
-      this.emit('levelup', { level: this.st.stats.level, why });
+      // 升级奖励：1 点洞察（可换 10 万，或买永久技能）
+      this.st.insightPts += 1;
+      leveled++;
+    }
+    if (leveled > 0) {
+      this.emit('levelup', { level: this.st.stats.level, why, gained: leveled });
       this.fx('bigwin'); this.hap('win');
     }
+  }
+
+  /**
+   * 强平阈值（维持率）。等级越高越抗打击。
+   * 基础 50%，每级 -0.7%，最低 40%。
+   * Lv.1 → 50%   Lv.5 → 47.2%   Lv.10 → 43.7%   Lv.15+ → 40%
+   */
+  liqThreshold() {
+    return Math.max(40, 50 - (this.st.stats.level - 1) * 0.7);
   }
 
   /* ===== 日志 / 对白 ===== */

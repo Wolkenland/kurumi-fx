@@ -1767,7 +1767,7 @@ class Core {
 
     const usedMargin = marginOverride === undefined ? this.usedMargin() : marginOverride;
     const eq = eqOverride === undefined ? this.equity() : eqOverride;
-    const lossAvail = eq - usedMargin * 0.5;
+    const lossAvail = eq - usedMargin * (this.liqThreshold() / 100);
     if (lossAvail <= 0) return s.price;                       // 现在就已经在爆仓边缘
     const curThis = ps.reduce((a, p) => a + this.unrealized(p), 0);
     const bearable = curThis + lossAvail;                     // 该品种可再承受的亏损
@@ -1788,7 +1788,7 @@ class Core {
   checkRisk() {
     if (!this.hasPosition()) { this.marginCall = null; return; }
     const rate = this.marginRate();
-    if (rate <= 50) {
+    if (rate <= this.liqThreshold()) {
       // 全部强平
       const list = this.st.positions.slice().sort((a, b) => this.unrealized(a) - this.unrealized(b));
       this.emit('liquidateBegin', {});
@@ -1800,7 +1800,8 @@ class Core {
       this.save();
       return;
     }
-    if (rate <= 100 && (!this.marginCall || this.marginCall.level !== 1)) {
+    const callLine = Math.max(92, 100 - (this.st.stats.level - 1) * 0.8);
+    if (rate <= callLine && (!this.marginCall || this.marginCall.level !== 1)) {
       this.marginCall = { level: 1, rate };
       this.fx('alarm'); this.hap('lose');
       this.emit('margincall', { level: 1, rate });
@@ -1916,16 +1917,34 @@ class Core {
   }
 
   /* ===== 经验 / 成就 ===== */
+  /** 升级所需经验 */
+  xpNeed(lv) { return 100 + ((lv || this.st.stats.level) - 1) * 85; }
+
   addXp(n, why) {
     this.st.stats.xp += n;
-    const need = 100 + (this.st.stats.level - 1) * 85;
-    if (this.st.stats.xp >= need) {
-      this.st.stats.xp -= need;
+    let leveled = 0;
+    // 一次可能连升多级
+    while (this.st.stats.xp >= this.xpNeed()) {
+      this.st.stats.xp -= this.xpNeed();
       this.st.stats.level++;
       this.st.stats.insight = Math.min(100, this.st.stats.insight + 4);
-      this.emit('levelup', { level: this.st.stats.level, why });
+      // 升级奖励：1 点洞察（可换 10 万，或买永久技能）
+      this.st.insightPts += 1;
+      leveled++;
+    }
+    if (leveled > 0) {
+      this.emit('levelup', { level: this.st.stats.level, why, gained: leveled });
       this.fx('bigwin'); this.hap('win');
     }
+  }
+
+  /**
+   * 强平阈值（维持率）。等级越高越抗打击。
+   * 基础 50%，每级 -0.7%，最低 40%。
+   * Lv.1 → 50%   Lv.5 → 47.2%   Lv.10 → 43.7%   Lv.15+ → 40%
+   */
+  liqThreshold() {
+    return Math.max(40, 50 - (this.st.stats.level - 1) * 0.7);
   }
 
   /* ===== 日志 / 对白 ===== */
@@ -2996,7 +3015,16 @@ const UI = {
       }
       case 'levelup': {
         Sfx.bigwin();
-        Sheets.msg('LEVEL UP', `交易者等级提升到 <b style="color:var(--gold)">Lv.${ev.level}</b><br><span style="font-size:11.5px;color:var(--tx2)">${ev.why || '经验来自每一次真实的盈亏。'}</span>`);
+        Sheets.msg('LEVEL UP',
+          `交易者等级提升到 <b style="color:var(--gold)">Lv.${ev.level}</b><br>
+           <div style="margin-top:10px;padding:9px 11px;border-radius:10px;
+             background:rgba(255,209,102,.10);border:1px solid rgba(255,209,102,.3);
+             font-size:12px;line-height:1.7">
+             🎁 获得 <b style="color:var(--gold)">${ev.gained || 1} 点洞察</b>（可换 10 万，或买永久技能）<br>
+             
+             <span style="font-size:11px;color:var(--tx2)">强平线已降至 ${this.core.liqThreshold().toFixed(1)}%</span>
+           </div>
+           <div style="font-size:11px;color:var(--tx3);margin-top:6px">${ev.why || '经验来自每一次真实的盈亏。'}</div>`);
         break;
       }
       case 'bark': FX.bark(ev.who, ev.line); break;
@@ -3062,7 +3090,7 @@ const UI = {
       const pnl = c.unrealized(p);
       const pips = (c.evalPrice(p) - p.entry) * p.dir / s.def.pip;
       const margin = p.units * (p.entry / p.lev);
-      const lossPct = U.clamp(-pnl / (margin * 0.5) * 100, 0, 100);
+      const lossPct = U.clamp(-pnl / (margin * c.liqThreshold() / 100) * 100, 0, 100);
       const node = el('div', 'pos ' + (p.dir > 0 ? 'long' : 'short'), `
         <div class="pos-head">
           <span class="pair" style="color:${s.def.color}">${s.def.short}</span>
@@ -3121,7 +3149,7 @@ const UI = {
       if (g[1]) g[1].textContent = c.evalPrice(p).toFixed(s.def.digits);
       if (g[3]) g[3].textContent = U.sfmt((c.evalPrice(p) - p.entry) * p.dir / s.def.pip, 1);
       const margin = p.units * (p.entry / p.lev);
-      const lossPct = U.clamp(-pnl / (margin * 0.5) * 100, 0, 100);
+      const lossPct = U.clamp(-pnl / (margin * c.liqThreshold() / 100) * 100, 0, 100);
       const bar = $('.pos-bar i', n);
       if (bar) bar.style.width = lossPct + '%';
     });
@@ -3242,7 +3270,17 @@ const UI = {
         <div class="heart" style="margin-top:6px"><span style="width:44px">洞察</span><div class="bar"><i style="width:${st.stats.insight}%;background:var(--blue)"></i></div><span class="mono" style="color:var(--blue)">${st.stats.insight.toFixed(0)}</span></div>
       </div>
       <div style="margin-top:10px;font-size:11px;color:var(--tx3);line-height:1.6">
-        冷静值越低，越容易做出"再加仓一点"的决定；贪欲越高，杠杆会越抬越高。洞察来自每一次真实的盈亏。
+        冷静值越低，越容易做出"再加仓一点"的决定；贪欲越高，杠杆会越抬越高。
+      </div>
+      <div style="margin-top:10px;padding:9px 11px;border-radius:11px;
+        background:rgba(140,180,255,.07);border:1px solid rgba(140,180,255,.22);font-size:11px;line-height:1.72">
+        <b style="color:var(--blue)">等级有什么用</b><br>
+        · 每升 1 级 → <b style="color:var(--gold)">+1 洞察点</b>（可换 10 万 / 买技能）<br>
+        · 每升 1 级 → <b>强平线 −0.7%</b>（50% → 最低 40%）<br>
+        · Lv.2 解锁「消費者金融」借贷<br>
+        · Lv.2 / Lv.3 触发关键剧情<br>
+        <span style="color:var(--tx3)">当前强平线：<b style="color:${c.liqThreshold() < 48 ? 'var(--up)' : 'var(--tx2)'}">${c.liqThreshold().toFixed(1)}%</b>
+        · 下一级需要 <b>${Math.ceil(c.xpNeed())}</b> 经验</span>
       </div>`;
 
     // 目标
