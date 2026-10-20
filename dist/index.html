@@ -2892,7 +2892,11 @@ const UI = {
     const u = c.unrealizedAll();
     $$('#eqDelta').textContent = U.sfmt(u) + ' 円';
     $$('#eqDelta').className = 'mono ' + (u > 0 ? 'tick-up' : u < 0 ? 'tick-dn' : '');
-    $$('#hudCash').textContent = U.fmt(c.st.cash);
+    // 可用保证金 = 净值 − 必要保证金（之前错显示成账户余额 cash，会误导玩家）
+    const free = c.freeMargin();
+    const freeEl = $$('#hudCash');
+    freeEl.textContent = U.fmt(free);
+    freeEl.className = 'v mono' + (free < 0 ? ' tick-dn' : '');
     $$('#hudMargin').textContent = U.fmt(c.usedMargin());
     const rate = c.marginRate();
     $$('#hudRate').textContent = isFinite(rate) ? rate.toFixed(0) + '%' : '—';
@@ -2905,6 +2909,21 @@ const UI = {
     bar.style.width = pct + '%';
     bar.style.background = rate < 100 ? 'var(--dn)' : rate < 200 ? 'var(--gold)' : 'var(--up)';
     $$('#hudDate').textContent = this.dateText();
+
+    // 「入金」按钮直接显示钱包里还有多少钱（之前要点了才知道）
+    const dep = $$('#btnDeposit');
+    if (dep) {
+      const w = c.st.wallet;
+      if (w >= 1) {
+        dep.textContent = `入金 · 钱包 ${U.yenShort(w)}`;
+        dep.classList.add('btn-gold');
+        dep.classList.remove('btn-ghost');
+      } else {
+        dep.textContent = '入金';
+        dep.classList.remove('btn-gold');
+        dep.classList.add('btn-ghost');
+      }
+    }
 
     const mc = c.marginCall;
     if (mc && !this._mcShown) {
