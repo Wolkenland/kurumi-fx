@@ -266,17 +266,42 @@ const AIUI = (() => {
         <span class="right"><b style="color:var(--gold);font-size:14px">${pts}</b> 点</span></div>
       <div style="font-size:11.5px;color:var(--tx2);line-height:1.68">
         洞察点来自竞赛优胜、对赌获胜、以及她的挑战达成。<br>
-        它<b style="color:var(--gold)">不随存档重置以外的方式消失</b>，可以永久强化你自己。
+        它可以<b style="color:var(--gold)">永久强化你自己</b>，也可以直接<b style="color:var(--up)">换成现金</b>。
       </div>
-      <div style="margin-top:10px">
-        ${['fees', 'rebate', 'intel'].map(k => {
+
+      <!-- 洞察换钱 -->
+      <div style="margin-top:10px;padding:10px 11px;border-radius:12px;
+        background:rgba(61,220,151,.08);border:1px solid rgba(61,220,151,.28)">
+        <div style="display:flex;align-items:baseline;gap:8px">
+          <span style="font-size:12.5px;font-weight:800;color:var(--up)">💱 洞察换钱</span>
+          <span style="font-size:10.5px;color:var(--tx3);margin-left:auto">
+            1 点 = <b class="mono" style="color:var(--up)">${U.fmt(core.insightRate())}</b> 円</span>
+        </div>
+        <div style="font-size:11px;color:var(--tx2);line-height:1.62;margin-top:6px">
+          ${pts > 0
+            ? `你现在有 <b style="color:var(--gold)">${pts}</b> 点，最多可换
+               <b class="mono" style="color:var(--up)">${U.fmt(pts * core.insightRate())}</b> 円。
+               兑换后直接进钱包，不会自动入金。`
+            : '还没有洞察点。去「三人 FX 竞赛」赢几期，或者押她一把。'}
+        </div>
+        <div class="row" style="margin-top:9px">
+          <button class="btn ${pts >= 1 ? 'btn-gold' : 'btn-ghost'} btn-sm" id="ex1" ${pts >= 1 ? '' : 'disabled'}>
+            兑换 1 点 → ${U.yenShort(core.insightRate())}</button>
+          <button class="btn btn-ghost btn-sm" id="exAll" ${pts >= 1 ? '' : 'disabled'}>
+            全部兑换 → ${U.yenShort(pts * core.insightRate())}</button>
+        </div>
+      </div>
+
+      <div style="margin-top:12px">
+        <div style="font-size:11px;font-weight:700;color:var(--tx3);margin-bottom:2px">永久技能</div>
+        ${PERK_ORDER.map(k => {
           const lv = perks[k] || 0;
           const max = core.perkMax(k);
           const cost = core.perkCost(k, lv + 1);
           const can = lv < max && pts >= cost;
           return `<div style="display:flex;align-items:center;gap:9px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05)">
             <div style="flex:1;min-width:0">
-              <div style="font-size:12.5px;font-weight:700">${PERK_DEFS[k].short}
+              <div style="font-size:12.5px;font-weight:700">${PERK_DEFS[k].icon || ''} ${PERK_DEFS[k].short}
                 <span class="tag ${lv ? 'gold' : ''}" style="margin-left:5px">Lv.${lv}/${max}</span></div>
               <div style="font-size:10.5px;color:var(--tx3);margin-top:2px">${PERK_DEFS[k].desc(lv)}</div>
               ${lv < max ? `<div style="font-size:10.5px;color:var(--tx3);margin-top:1px">下一级：${PERK_DEFS[k].desc(lv + 1)}</div>` : ''}
@@ -325,6 +350,8 @@ const AIUI = (() => {
       else { AIPlayer.enable({}); ui.toast('她回到了盘面', 'up'); }
       render();
     });
+    bind('ex1', () => doExchange(1));
+    bind('exAll', () => doExchange(core.st.insightPts));
     bind('aiBet', () => doBet(100000));
     bind('aiBetC', () => {
       Sheets.number('对赌押注', `押「${a.name}」本期收益为正。<br>可押金额：<b class="mono">${U.fmt(core.st.wallet)} 円</b>（钱包里的钱）`,
@@ -355,6 +382,14 @@ const AIUI = (() => {
       const up = equityHist[equityHist.length - 1] >= equityHist[0];
       drawSparkline(sp, equityHist, up ? 'rgb(61,220,151)' : 'rgb(255,77,109)');
     }
+  }
+
+  function doExchange(points) {
+    const r = core.exchangeInsight(points);
+    if (!r.ok) return ui.toast(r.why, 'dn');
+    ui.toast(`换到 ${U.fmt(r.money)} 円（已进钱包）`, 'up');
+    Sfx.coin(); Haptics.win();
+    render();
   }
 
   function doBet(amount) {

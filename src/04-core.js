@@ -83,7 +83,9 @@ function initialState() {
              fxQuit: false, prologue: false },
     goals: [],
     insightPts: 0,                 // 洞察点（AI 奖励机制的通用货币）
-    perks: { fees: 0, rebate: 0, intel: 0 },   // 交易成本减免 / 爆仓保险 / 情报力
+    perks: { fees: 0, rebate: 0, intel: 0, credit: 0, swap: 0, guts: 0 },
+    // fees 交易成本减免 / rebate 爆仓保险 / intel 情报力
+    // credit 信用力(借贷额度) / swap 利息谈判 / guts 胆力(抗精神打击)
     contest: null,                 // 竞赛状态（由 AI 模块驱动）
     bets: [],                      // 对赌记录
     aiGoals: [],                   // 给 AI 设定的挑战目标
@@ -121,19 +123,57 @@ class Core {
   hap(name) { if (this.agent) return; try { Haptics[name].apply(Haptics, [].slice.call(arguments, 1)); } catch (e) {} }
 
   /* ===== 永久技能（洞察点购买）===== */
+
+  /** 1 点洞察能兑换多少钱（日元） */
+  static get INSIGHT_RATE() { return 100000; }
+  insightRate() { return 100000; }
+
   /** 点差倍率：交易成本减免 Lv1-3 → 0.9 / 0.8 / 0.7 */
   spreadMul() { return 1 - 0.1 * (this.st.perks.fees || 0); }
   /** 某品种的实际点差 */
   spreadOf(pid) { return this.market.pair(pid).def.spread * this.spreadMul(); }
+
   /** 爆仓保险返还比例 */
   rebateRate() { return 0.1 * (this.st.perks.rebate || 0); }
 
-  perkCost(key, level) {
-    // level 是"要升到的等级"
-    const table = { 1: 3, 2: 6, 3: 10 };
-    return table[level] || 99;
+  /** 信用力：借贷额度上限倍率（每级 +25%） */
+  loanLimitMul() { return 1 + 0.25 * (this.st.perks.credit || 0); }
+  /** 某借贷渠道的实际可借上限 */
+  loanLimit(def) { return Math.round(def.limit * this.loanLimitMul()); }
+
+  /**
+   * 利息谈判：隔夜利息改善倍率
+   * @param dir +1 表示收利息（放大），-1 表示付利息（缩小）
+   */
+  swapMul(dir) {
+    const lv = this.st.perks.swap || 0;
+    return dir >= 0 ? 1 + 0.3 * lv : 1 - 0.3 * lv;
   }
-  perkMax(key) { return key === 'intel' ? 2 : 3; }
+
+  /** 胆力：精神损失倍率（每级 -40%，最低 20%） */
+  mentalLossMul() { return Math.max(0.2, 1 - 0.4 * (this.st.perks.guts || 0)); }
+
+  /* ---- 技能定义表 ---- */
+  static get PERK_MAX() {
+    return { fees: 3, rebate: 3, intel: 2, credit: 3, swap: 3, guts: 2 };
+  }
+  static get PERK_COST() {
+    return {
+      fees:   { 1: 3, 2: 6, 3: 10 },
+      rebate: { 1: 3, 2: 6, 3: 10 },
+      intel:  { 1: 3, 2: 6 },
+      credit: { 1: 4, 2: 8, 3: 14 },
+      swap:   { 1: 3, 2: 7, 3: 12 },
+      guts:   { 1: 3, 2: 6 },
+    };
+  }
+
+  perkCost(key, level) {
+    const row = Core.PERK_COST[key];
+    return (row && row[level]) || 99;
+  }
+  perkMax(key) { return Core.PERK_MAX[key] || 3; }
+
   buyPerk(key) {
     const cur = this.st.perks[key] || 0;
     if (cur >= this.perkMax(key)) return { ok: false, why: '已经满级了' };
@@ -147,6 +187,23 @@ class Core {
     this.save();
     return { ok: true, level: cur + 1 };
   }
+
+  /* ===== 洞察点 ↔ 金钱 ===== */
+  /** 1 点洞察 = 10 万円，兑到的钱进钱包（可自由决定是否入金） */
+  exchangeInsight(points) {
+    const n = Math.floor(points);
+    if (!(n > 0)) return { ok: false, why: '兑换点数必须是正整数' };
+    if (this.st.insightPts < n) return { ok: false, why: `洞察点不足（你有 ${this.st.insightPts} 点）` };
+    const money = n * this.insightRate();
+    this.st.insightPts -= n;
+    this.st.wallet += money;
+    this.fx('coin'); this.hap('win');
+    this.pushLog('exchange', `洞察兑换：${n} 点 → ${U.fmt(money)} 円`, money);
+    this.emit('exchange', { points: n, money });
+    this.save();
+    return { ok: true, points: n, money };
+  }
+
   addInsight(n, why) {
     this.st.insightPts += n;
     this.emit('insight', { n, why, total: this.st.insightPts });
@@ -225,7 +282,8 @@ class Core {
     for (const p of this.st.positions) {
       const s = this.market.pair(p.pid);
       const rate = p.dir > 0 ? s.def.swapL : s.def.swapS;
-      const v = p.units * s.def.price * rate * mult;
+      // 利息谈判：收利息放大、付利息缩小
+      const v = p.units * s.def.price * rate * mult * this.swapMul(rate >= 0 ? 1 : -1);
       swap += v;
     }
     this.st.swapToday = swap;
@@ -359,7 +417,7 @@ class Core {
     const marginBack = p.units * (p.entry / p.lev);
     this.st.cash += marginBack + pnl;
     this.st.stats.totalPnl += pnl;
-    this.st.stats.mental = U.clamp(this.st.stats.mental - 18, 0, 100);
+    this.st.stats.mental = U.clamp(this.st.stats.mental - 18 * this.mentalLossMul(), 0, 100);
     this.st.stats.liquidated++;
     if (pnl < this.st.stats.worstLoss) this.st.stats.worstLoss = pnl;
     const i = this.st.positions.indexOf(p);
@@ -417,7 +475,7 @@ class Core {
       this.emit('liquidateBegin', {});
       this.fx('crash'); this.hap('crash');
       const recs = list.map(p => this.liquidate(p, 'liquidated'));
-      this.st.stats.mental = U.clamp(this.st.stats.mental - 15, 0, 100);
+      this.st.stats.mental = U.clamp(this.st.stats.mental - 15 * this.mentalLossMul(), 0, 100);
       this.marginCall = null;
       this.emit('liquidated', { recs });
       this.save();
@@ -469,7 +527,8 @@ class Core {
     if (!def.require(this.st)) return { ok: false, why: '对方不会借给你' };
     if (amount <= 0) return { ok: false, why: '金额无效' };
     const already = this.borrowedOf(pid);
-    if (already + amount > def.limit) return { ok: false, why: `这个渠道的上限是 ${U.fmt(def.limit)} 円（已借 ${U.fmt(already)}）` };
+    const cap = this.loanLimit(def);
+    if (already + amount > cap) return { ok: false, why: `这个渠道的上限是 ${U.fmt(cap)} 円（已借 ${U.fmt(already)}）` };
     const fee = Math.round(amount * def.fee);
     const got = amount - fee;
     this.st.loans.push({ pid, amount, since: this.st.date.day, rollDay: this.st.date.day + def.grace, principal: amount });

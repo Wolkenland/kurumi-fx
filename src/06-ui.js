@@ -805,8 +805,8 @@ const UI = {
           <div class="loan-h"><span class="nm">${def.name}</span>
             <span class="rt mono debt-fire" style="color:${def.color}">${U.fmt(amt)}</span></div>
           <div class="loan-desc">年利 ${(def.rate * 100).toFixed(1)}% ・ 每日利息约 <b class="mono">${U.fmt(amt * def.rate / 365, 1)}</b> 円</div>
-          <div class="loan-meter"><i style="width:${U.clamp(amt / def.limit * 100, 0, 100)}%;background:${def.color}"></i></div>
-          <div class="loan-meta"><span>上限 ${U.fmt(def.limit)}</span><span>已用 ${(amt / def.limit * 100).toFixed(0)}%</span></div>`;
+          <div class="loan-meter"><i style="width:${U.clamp(amt / c.loanLimit(def) * 100, 0, 100)}%;background:${def.color}"></i></div>
+          <div class="loan-meta"><span>上限 ${U.fmt(c.loanLimit(def))}</span><span>已用 ${(amt / c.loanLimit(def) * 100).toFixed(0)}%</span></div>`;
         const acts = el('div', 'pos-actions');
         const b1 = el('button', 'btn btn-gold btn-sm', '还清这笔');
         bindTap(b1, () => {
@@ -831,14 +831,14 @@ const UI = {
     box.appendChild(h2);
     offers.forEach(def => {
       const used = c.borrowedOf(def.id);
-      const avail = def.limit - used;
+      const avail = c.loanLimit(def) - used;
       const node = el('div', 'loan-card');
       node.innerHTML = `
         <div class="bar" style="background:${def.color};opacity:.85"></div>
         <div class="loan-h"><span class="nm">${def.name}</span>
           <span class="rt" style="color:${def.color}">${def.sub}</span></div>
         <div class="loan-desc">${def.desc}</div>
-        <div class="loan-meter"><i style="width:${used / def.limit * 100}%;background:${def.color}"></i></div>
+        <div class="loan-meter"><i style="width:${used / c.loanLimit(def) * 100}%;background:${def.color}"></i></div>
         <div class="loan-meta"><span>可借 ${U.fmt(avail)} 円</span>
           <span>手数料 ${(def.fee * 100).toFixed(0)}%</span>
           <span>还款周期 ${def.grace} 天</span></div>
@@ -1157,7 +1157,7 @@ const Sheets = {
   },
   borrow(def, core, ui) {
     const used = core.borrowedOf(def.id);
-    const avail = def.limit - used;
+    const avail = core.loanLimit(def) - used;
     const sh = this.base(`
       <h3>${def.name}</h3>
       <div class="sub">${def.desc}</div>

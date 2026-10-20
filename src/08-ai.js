@@ -42,13 +42,22 @@ const AI_REWARDS = {
 };
 
 const PERK_DEFS = {
-  fees:  { name: '取引手数料の交渉', short: '交易成本减免',
+  fees:  { name: '取引手数料の交渉', short: '交易成本减免', icon: '💴',
            desc: lv => `点差成本降低 ${lv * 10}%（她替你跟券商谈的）` },
-  rebate:{ name: 'ロスカット保険', short: '爆仓保险',
-           desc: lv => `被强平时返还保证金的 ${lv * 10}%` },
-  intel: { name: '情報網', short: '情报力',
+  rebate:{ name: 'ロスカット保険', short: '爆仓保险', icon: '🛡️',
+           desc: lv => lv === 0 ? '无' : `被强平时返还保证金的 ${lv * 10}%` },
+  intel: { name: '情報網', short: '情报力', icon: '📡',
            desc: lv => lv === 0 ? '无' : lv === 1 ? '新闻提前 1 拍提示' : '新闻提前 2 拍提示，并显示方向' },
+  credit:{ name: '信用力', short: '信用力', icon: '🏦',
+           desc: lv => lv === 0 ? '无' : `所有借贷渠道额度上限 +${lv * 25}%` },
+  swap:  { name: 'スワップ交渉', short: '利息谈判', icon: '💱',
+           desc: lv => lv === 0 ? '无' : `隔夜利息：收入 +${lv * 30}%，支出 −${lv * 30}%` },
+  guts:  { name: '胆力', short: '胆力', icon: '🔥',
+           desc: lv => lv === 0 ? '无' : `被强平的精神打击 −${lv * 40}%` },
 };
+
+/** 技能展示顺序 */
+const PERK_ORDER = ['fees', 'rebate', 'intel', 'credit', 'swap', 'guts'];
 
 /* ---------------- LLM 客户端 ---------------- */
 const LLM = (() => {

@@ -1396,7 +1396,9 @@ function initialState() {
              fxQuit: false, prologue: false },
     goals: [],
     insightPts: 0,                 // 洞察点（AI 奖励机制的通用货币）
-    perks: { fees: 0, rebate: 0, intel: 0 },   // 交易成本减免 / 爆仓保险 / 情报力
+    perks: { fees: 0, rebate: 0, intel: 0, credit: 0, swap: 0, guts: 0 },
+    // fees 交易成本减免 / rebate 爆仓保险 / intel 情报力
+    // credit 信用力(借贷额度) / swap 利息谈判 / guts 胆力(抗精神打击)
     contest: null,                 // 竞赛状态（由 AI 模块驱动）
     bets: [],                      // 对赌记录
     aiGoals: [],                   // 给 AI 设定的挑战目标
@@ -1434,19 +1436,57 @@ class Core {
   hap(name) { if (this.agent) return; try { Haptics[name].apply(Haptics, [].slice.call(arguments, 1)); } catch (e) {} }
 
   /* ===== 永久技能（洞察点购买）===== */
+
+  /** 1 点洞察能兑换多少钱（日元） */
+  static get INSIGHT_RATE() { return 100000; }
+  insightRate() { return 100000; }
+
   /** 点差倍率：交易成本减免 Lv1-3 → 0.9 / 0.8 / 0.7 */
   spreadMul() { return 1 - 0.1 * (this.st.perks.fees || 0); }
   /** 某品种的实际点差 */
   spreadOf(pid) { return this.market.pair(pid).def.spread * this.spreadMul(); }
+
   /** 爆仓保险返还比例 */
   rebateRate() { return 0.1 * (this.st.perks.rebate || 0); }
 
-  perkCost(key, level) {
-    // level 是"要升到的等级"
-    const table = { 1: 3, 2: 6, 3: 10 };
-    return table[level] || 99;
+  /** 信用力：借贷额度上限倍率（每级 +25%） */
+  loanLimitMul() { return 1 + 0.25 * (this.st.perks.credit || 0); }
+  /** 某借贷渠道的实际可借上限 */
+  loanLimit(def) { return Math.round(def.limit * this.loanLimitMul()); }
+
+  /**
+   * 利息谈判：隔夜利息改善倍率
+   * @param dir +1 表示收利息（放大），-1 表示付利息（缩小）
+   */
+  swapMul(dir) {
+    const lv = this.st.perks.swap || 0;
+    return dir >= 0 ? 1 + 0.3 * lv : 1 - 0.3 * lv;
   }
-  perkMax(key) { return key === 'intel' ? 2 : 3; }
+
+  /** 胆力：精神损失倍率（每级 -40%，最低 20%） */
+  mentalLossMul() { return Math.max(0.2, 1 - 0.4 * (this.st.perks.guts || 0)); }
+
+  /* ---- 技能定义表 ---- */
+  static get PERK_MAX() {
+    return { fees: 3, rebate: 3, intel: 2, credit: 3, swap: 3, guts: 2 };
+  }
+  static get PERK_COST() {
+    return {
+      fees:   { 1: 3, 2: 6, 3: 10 },
+      rebate: { 1: 3, 2: 6, 3: 10 },
+      intel:  { 1: 3, 2: 6 },
+      credit: { 1: 4, 2: 8, 3: 14 },
+      swap:   { 1: 3, 2: 7, 3: 12 },
+      guts:   { 1: 3, 2: 6 },
+    };
+  }
+
+  perkCost(key, level) {
+    const row = Core.PERK_COST[key];
+    return (row && row[level]) || 99;
+  }
+  perkMax(key) { return Core.PERK_MAX[key] || 3; }
+
   buyPerk(key) {
     const cur = this.st.perks[key] || 0;
     if (cur >= this.perkMax(key)) return { ok: false, why: '已经满级了' };
@@ -1460,6 +1500,23 @@ class Core {
     this.save();
     return { ok: true, level: cur + 1 };
   }
+
+  /* ===== 洞察点 ↔ 金钱 ===== */
+  /** 1 点洞察 = 10 万円，兑到的钱进钱包（可自由决定是否入金） */
+  exchangeInsight(points) {
+    const n = Math.floor(points);
+    if (!(n > 0)) return { ok: false, why: '兑换点数必须是正整数' };
+    if (this.st.insightPts < n) return { ok: false, why: `洞察点不足（你有 ${this.st.insightPts} 点）` };
+    const money = n * this.insightRate();
+    this.st.insightPts -= n;
+    this.st.wallet += money;
+    this.fx('coin'); this.hap('win');
+    this.pushLog('exchange', `洞察兑换：${n} 点 → ${U.fmt(money)} 円`, money);
+    this.emit('exchange', { points: n, money });
+    this.save();
+    return { ok: true, points: n, money };
+  }
+
   addInsight(n, why) {
     this.st.insightPts += n;
     this.emit('insight', { n, why, total: this.st.insightPts });
@@ -1538,7 +1595,8 @@ class Core {
     for (const p of this.st.positions) {
       const s = this.market.pair(p.pid);
       const rate = p.dir > 0 ? s.def.swapL : s.def.swapS;
-      const v = p.units * s.def.price * rate * mult;
+      // 利息谈判：收利息放大、付利息缩小
+      const v = p.units * s.def.price * rate * mult * this.swapMul(rate >= 0 ? 1 : -1);
       swap += v;
     }
     this.st.swapToday = swap;
@@ -1672,7 +1730,7 @@ class Core {
     const marginBack = p.units * (p.entry / p.lev);
     this.st.cash += marginBack + pnl;
     this.st.stats.totalPnl += pnl;
-    this.st.stats.mental = U.clamp(this.st.stats.mental - 18, 0, 100);
+    this.st.stats.mental = U.clamp(this.st.stats.mental - 18 * this.mentalLossMul(), 0, 100);
     this.st.stats.liquidated++;
     if (pnl < this.st.stats.worstLoss) this.st.stats.worstLoss = pnl;
     const i = this.st.positions.indexOf(p);
@@ -1730,7 +1788,7 @@ class Core {
       this.emit('liquidateBegin', {});
       this.fx('crash'); this.hap('crash');
       const recs = list.map(p => this.liquidate(p, 'liquidated'));
-      this.st.stats.mental = U.clamp(this.st.stats.mental - 15, 0, 100);
+      this.st.stats.mental = U.clamp(this.st.stats.mental - 15 * this.mentalLossMul(), 0, 100);
       this.marginCall = null;
       this.emit('liquidated', { recs });
       this.save();
@@ -1782,7 +1840,8 @@ class Core {
     if (!def.require(this.st)) return { ok: false, why: '对方不会借给你' };
     if (amount <= 0) return { ok: false, why: '金额无效' };
     const already = this.borrowedOf(pid);
-    if (already + amount > def.limit) return { ok: false, why: `这个渠道的上限是 ${U.fmt(def.limit)} 円（已借 ${U.fmt(already)}）` };
+    const cap = this.loanLimit(def);
+    if (already + amount > cap) return { ok: false, why: `这个渠道的上限是 ${U.fmt(cap)} 円（已借 ${U.fmt(already)}）` };
     const fee = Math.round(amount * def.fee);
     const got = amount - fee;
     this.st.loans.push({ pid, amount, since: this.st.date.day, rollDay: this.st.date.day + def.grace, principal: amount });
@@ -3083,8 +3142,8 @@ const UI = {
           <div class="loan-h"><span class="nm">${def.name}</span>
             <span class="rt mono debt-fire" style="color:${def.color}">${U.fmt(amt)}</span></div>
           <div class="loan-desc">年利 ${(def.rate * 100).toFixed(1)}% ・ 每日利息约 <b class="mono">${U.fmt(amt * def.rate / 365, 1)}</b> 円</div>
-          <div class="loan-meter"><i style="width:${U.clamp(amt / def.limit * 100, 0, 100)}%;background:${def.color}"></i></div>
-          <div class="loan-meta"><span>上限 ${U.fmt(def.limit)}</span><span>已用 ${(amt / def.limit * 100).toFixed(0)}%</span></div>`;
+          <div class="loan-meter"><i style="width:${U.clamp(amt / c.loanLimit(def) * 100, 0, 100)}%;background:${def.color}"></i></div>
+          <div class="loan-meta"><span>上限 ${U.fmt(c.loanLimit(def))}</span><span>已用 ${(amt / c.loanLimit(def) * 100).toFixed(0)}%</span></div>`;
         const acts = el('div', 'pos-actions');
         const b1 = el('button', 'btn btn-gold btn-sm', '还清这笔');
         bindTap(b1, () => {
@@ -3109,14 +3168,14 @@ const UI = {
     box.appendChild(h2);
     offers.forEach(def => {
       const used = c.borrowedOf(def.id);
-      const avail = def.limit - used;
+      const avail = c.loanLimit(def) - used;
       const node = el('div', 'loan-card');
       node.innerHTML = `
         <div class="bar" style="background:${def.color};opacity:.85"></div>
         <div class="loan-h"><span class="nm">${def.name}</span>
           <span class="rt" style="color:${def.color}">${def.sub}</span></div>
         <div class="loan-desc">${def.desc}</div>
-        <div class="loan-meter"><i style="width:${used / def.limit * 100}%;background:${def.color}"></i></div>
+        <div class="loan-meter"><i style="width:${used / c.loanLimit(def) * 100}%;background:${def.color}"></i></div>
         <div class="loan-meta"><span>可借 ${U.fmt(avail)} 円</span>
           <span>手数料 ${(def.fee * 100).toFixed(0)}%</span>
           <span>还款周期 ${def.grace} 天</span></div>
@@ -3435,7 +3494,7 @@ const Sheets = {
   },
   borrow(def, core, ui) {
     const used = core.borrowedOf(def.id);
-    const avail = def.limit - used;
+    const avail = core.loanLimit(def) - used;
     const sh = this.base(`
       <h3>${def.name}</h3>
       <div class="sub">${def.desc}</div>
@@ -3591,13 +3650,22 @@ const AI_REWARDS = {
 };
 
 const PERK_DEFS = {
-  fees:  { name: '取引手数料の交渉', short: '交易成本减免',
+  fees:  { name: '取引手数料の交渉', short: '交易成本减免', icon: '💴',
            desc: lv => `点差成本降低 ${lv * 10}%（她替你跟券商谈的）` },
-  rebate:{ name: 'ロスカット保険', short: '爆仓保险',
-           desc: lv => `被强平时返还保证金的 ${lv * 10}%` },
-  intel: { name: '情報網', short: '情报力',
+  rebate:{ name: 'ロスカット保険', short: '爆仓保险', icon: '🛡️',
+           desc: lv => lv === 0 ? '无' : `被强平时返还保证金的 ${lv * 10}%` },
+  intel: { name: '情報網', short: '情报力', icon: '📡',
            desc: lv => lv === 0 ? '无' : lv === 1 ? '新闻提前 1 拍提示' : '新闻提前 2 拍提示，并显示方向' },
+  credit:{ name: '信用力', short: '信用力', icon: '🏦',
+           desc: lv => lv === 0 ? '无' : `所有借贷渠道额度上限 +${lv * 25}%` },
+  swap:  { name: 'スワップ交渉', short: '利息谈判', icon: '💱',
+           desc: lv => lv === 0 ? '无' : `隔夜利息：收入 +${lv * 30}%，支出 −${lv * 30}%` },
+  guts:  { name: '胆力', short: '胆力', icon: '🔥',
+           desc: lv => lv === 0 ? '无' : `被强平的精神打击 −${lv * 40}%` },
 };
+
+/** 技能展示顺序 */
+const PERK_ORDER = ['fees', 'rebate', 'intel', 'credit', 'swap', 'guts'];
 
 /* ---------------- LLM 客户端 ---------------- */
 const LLM = (() => {
@@ -4689,17 +4757,42 @@ const AIUI = (() => {
         <span class="right"><b style="color:var(--gold);font-size:14px">${pts}</b> 点</span></div>
       <div style="font-size:11.5px;color:var(--tx2);line-height:1.68">
         洞察点来自竞赛优胜、对赌获胜、以及她的挑战达成。<br>
-        它<b style="color:var(--gold)">不随存档重置以外的方式消失</b>，可以永久强化你自己。
+        它可以<b style="color:var(--gold)">永久强化你自己</b>，也可以直接<b style="color:var(--up)">换成现金</b>。
       </div>
-      <div style="margin-top:10px">
-        ${['fees', 'rebate', 'intel'].map(k => {
+
+      <!-- 洞察换钱 -->
+      <div style="margin-top:10px;padding:10px 11px;border-radius:12px;
+        background:rgba(61,220,151,.08);border:1px solid rgba(61,220,151,.28)">
+        <div style="display:flex;align-items:baseline;gap:8px">
+          <span style="font-size:12.5px;font-weight:800;color:var(--up)">💱 洞察换钱</span>
+          <span style="font-size:10.5px;color:var(--tx3);margin-left:auto">
+            1 点 = <b class="mono" style="color:var(--up)">${U.fmt(core.insightRate())}</b> 円</span>
+        </div>
+        <div style="font-size:11px;color:var(--tx2);line-height:1.62;margin-top:6px">
+          ${pts > 0
+            ? `你现在有 <b style="color:var(--gold)">${pts}</b> 点，最多可换
+               <b class="mono" style="color:var(--up)">${U.fmt(pts * core.insightRate())}</b> 円。
+               兑换后直接进钱包，不会自动入金。`
+            : '还没有洞察点。去「三人 FX 竞赛」赢几期，或者押她一把。'}
+        </div>
+        <div class="row" style="margin-top:9px">
+          <button class="btn ${pts >= 1 ? 'btn-gold' : 'btn-ghost'} btn-sm" id="ex1" ${pts >= 1 ? '' : 'disabled'}>
+            兑换 1 点 → ${U.yenShort(core.insightRate())}</button>
+          <button class="btn btn-ghost btn-sm" id="exAll" ${pts >= 1 ? '' : 'disabled'}>
+            全部兑换 → ${U.yenShort(pts * core.insightRate())}</button>
+        </div>
+      </div>
+
+      <div style="margin-top:12px">
+        <div style="font-size:11px;font-weight:700;color:var(--tx3);margin-bottom:2px">永久技能</div>
+        ${PERK_ORDER.map(k => {
           const lv = perks[k] || 0;
           const max = core.perkMax(k);
           const cost = core.perkCost(k, lv + 1);
           const can = lv < max && pts >= cost;
           return `<div style="display:flex;align-items:center;gap:9px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05)">
             <div style="flex:1;min-width:0">
-              <div style="font-size:12.5px;font-weight:700">${PERK_DEFS[k].short}
+              <div style="font-size:12.5px;font-weight:700">${PERK_DEFS[k].icon || ''} ${PERK_DEFS[k].short}
                 <span class="tag ${lv ? 'gold' : ''}" style="margin-left:5px">Lv.${lv}/${max}</span></div>
               <div style="font-size:10.5px;color:var(--tx3);margin-top:2px">${PERK_DEFS[k].desc(lv)}</div>
               ${lv < max ? `<div style="font-size:10.5px;color:var(--tx3);margin-top:1px">下一级：${PERK_DEFS[k].desc(lv + 1)}</div>` : ''}
@@ -4748,6 +4841,8 @@ const AIUI = (() => {
       else { AIPlayer.enable({}); ui.toast('她回到了盘面', 'up'); }
       render();
     });
+    bind('ex1', () => doExchange(1));
+    bind('exAll', () => doExchange(core.st.insightPts));
     bind('aiBet', () => doBet(100000));
     bind('aiBetC', () => {
       Sheets.number('对赌押注', `押「${a.name}」本期收益为正。<br>可押金额：<b class="mono">${U.fmt(core.st.wallet)} 円</b>（钱包里的钱）`,
@@ -4778,6 +4873,14 @@ const AIUI = (() => {
       const up = equityHist[equityHist.length - 1] >= equityHist[0];
       drawSparkline(sp, equityHist, up ? 'rgb(61,220,151)' : 'rgb(255,77,109)');
     }
+  }
+
+  function doExchange(points) {
+    const r = core.exchangeInsight(points);
+    if (!r.ok) return ui.toast(r.why, 'dn');
+    ui.toast(`换到 ${U.fmt(r.money)} 円（已进钱包）`, 'up');
+    Sfx.coin(); Haptics.win();
+    render();
   }
 
   function doBet(amount) {
