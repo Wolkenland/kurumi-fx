@@ -1,33 +1,36 @@
 #!/usr/bin/env node
 /**
- * 配乐与音效合成器
+ * 配乐与音效合成器 —— 「燃」版
  *
- * 没有任何外部音源/采样，全部用数学合成：
- *   · 振荡器（正弦 / 三角 / 锯齿 / 方波）+ ADSR 包络
- *   · 一阶低通滤波
- *   · 简化的立体声延迟混响
- *   · 节奏序列 + 场景强度曲线
+ * 风格：电子摇滚 / 赛博朋克
+ *   · 128 BPM，四四拍鼓组（kick / snare / hihat / clap）
+ *   · 八分音符锯齿贝斯推进
+ *   · 主旋律 lead（方波 + 延迟）
+ *   · 十六分音符琶音
+ *   · 和声进行：Am – F – C – G（最"燃"的万能进行）
  *
- * 输出 44.1kHz / 16bit / 立体声 WAV
+ * 结构：蓄力 → 建立 → 第一次 drop → 第二次 drop → 科技感 → 第三次 drop → 收束
  *
- *   node tools/audio-synth.js  →  dist/score.wav
+ * 全部数学合成，无外部采样。输出 44.1kHz / 16bit / 立体声 WAV
  */
 const fs = require('fs');
 const path = require('path');
 
 const SR = 44100;
-const DUR = 122;                       // 与视频等长
+const DUR = 122;
 const N = SR * DUR;
+const BPM = 128;
+const BEAT = 60 / BPM;            // 0.46875s
+const BAR = BEAT * 4;             // 1.875s
 
 const bufL = new Float32Array(N);
 const bufR = new Float32Array(N);
 
-/* ================= 工具 ================= */
+/* ================= 基础工具 ================= */
 const midi = n => 440 * Math.pow(2, (n - 69) / 12);
 const clamp = (x, a, b) => x < a ? a : x > b ? b : x;
 const lerp = (a, b, t) => a + (b - a) * t;
 
-/** 分段折线插值：给定 [[t,v],...] 求 t 时刻的值 */
 function curve(pts, t) {
   if (t <= pts[0][0]) return pts[0][1];
   for (let i = 1; i < pts.length; i++) {
@@ -39,203 +42,308 @@ function curve(pts, t) {
   return pts[pts.length - 1][1];
 }
 
-/** ADSR 包络值 */
-function adsr(i, len, a, d, s, r) {
-  const an = Math.max(1, a * SR), dn = Math.max(1, d * SR), rn = Math.max(1, r * SR);
-  if (i < an) return i / an;
-  if (i < an + dn) return lerp(1, s, (i - an) / dn);
-  if (i < len - rn) return s;
-  if (i < len) return s * (1 - (i - (len - rn)) / rn);
-  return 0;
-}
-
-/** 振荡器 */
 function osc(type, phase) {
-  const p = phase % 1;
+  const p = phase - Math.floor(phase);
   switch (type) {
     case 'sin': return Math.sin(p * Math.PI * 2);
     case 'tri': return 1 - 4 * Math.abs(p - 0.5);
     case 'saw': return 2 * p - 1;
     case 'sqr': return p < 0.5 ? 1 : -1;
+    case 'sqr25': return p < 0.25 ? 1 : -1;   // 窄方波，更"电子"
     default: return Math.sin(p * Math.PI * 2);
   }
 }
 
-/** 加一个音符 */
-function note(t0, dur, freq, opt) {
+/** 通用发声：包络由 exp 衰减曲线给出 */
+function voice(t0, dur, freq, opt) {
   opt = opt || {};
   const type = opt.type || 'sin';
   const gain = opt.gain === undefined ? 0.2 : opt.gain;
-  const pan = opt.pan === undefined ? 0 : opt.pan;          // -1 ~ 1
-  const a = opt.a || 0.01, d = opt.d || 0.12, s = opt.s === undefined ? 0.7 : opt.s, r = opt.r || 0.2;
+  const pan = opt.pan || 0;
+  const atk = opt.a === undefined ? 0.005 : opt.a;
+  const rel = opt.r === undefined ? 0.08 : opt.r;
+  const decay = opt.decay === undefined ? 0 : opt.decay;     // 指数衰减速度（0=不衰减）
   const detune = opt.detune || 0;
-  const vibrato = opt.vibrato || 0;
+  const vib = opt.vibrato || 0;
+  const fSlide = opt.slide || 0;                              // 频率滑动目标比例
+
   const start = Math.floor(t0 * SR);
   const len = Math.floor(dur * SR);
   const gl = Math.cos((pan + 1) * Math.PI / 4);
   const gr = Math.sin((pan + 1) * Math.PI / 4);
-  let ph1 = Math.random(), ph2 = Math.random();
+  let ph1 = 0, ph2 = 0;
+  const an = Math.max(1, atk * SR), rn = Math.max(1, rel * SR);
+
   for (let i = 0; i < len; i++) {
     const idx = start + i;
     if (idx >= N) break;
-    const env = adsr(i, len, a, d, s, r);
-    if (env <= 0) continue;
-    const vib = vibrato ? 1 + vibrato * Math.sin(i / SR * Math.PI * 2 * 5.5) : 1;
-    const f = freq * vib;
+    let env;
+    if (i < an) env = i / an;
+    else if (i > len - rn) env = 1 - (i - (len - rn)) / rn;
+    else env = 1;
+    if (decay) env *= Math.exp(-decay * i / SR);
+    if (env <= 0.0001) continue;
+
+    const prog = i / len;
+    const f = freq * (1 + vib * Math.sin(i / SR * Math.PI * 2 * 5.2)) * (1 + fSlide * prog);
     ph1 += f / SR;
     ph2 += (f * (1 + detune)) / SR;
     let v = osc(type, ph1);
-    if (detune) v = (v + osc(type, ph2)) * 0.5;
+    if (detune) v = (v + osc(type, ph2)) * 0.55;
     const out = v * env * gain;
     bufL[idx] += out * gl;
     bufR[idx] += out * gr;
   }
 }
 
-/** 噪声（打击乐 / 类鼓） */
-function noiseHit(t0, dur, gain, opt) {
+/** 噪声类打击 */
+function noise(t0, dur, gain, opt) {
   opt = opt || {};
   const start = Math.floor(t0 * SR);
   const len = Math.floor(dur * SR);
-  const a = opt.a || 0.002, d = opt.d || dur * 0.6;
-  const hp = opt.hp || 0.2;
+  const hp = opt.hp === undefined ? 0.3 : opt.hp;
+  const decay = opt.decay === undefined ? 30 : opt.decay;
+  const pan = opt.pan || 0;
+  const gl = Math.cos((pan + 1) * Math.PI / 4);
+  const gr = Math.sin((pan + 1) * Math.PI / 4);
   let prev = 0;
   for (let i = 0; i < len; i++) {
     const idx = start + i;
     if (idx >= N) break;
-    const env = adsr(i, len, a, d, 0.06, dur * 0.3);
+    const env = Math.exp(-decay * i / len);
     const n = Math.random() * 2 - 1;
-    // 简易高通
-    const out = n - prev * hp;
+    const out = (n - prev * hp) * env * gain;
     prev = n;
-    const v = out * env * gain;
-    bufL[idx] += v;
-    bufR[idx] += v;
+    bufL[idx] += out * gl;
+    bufR[idx] += out * gr;
   }
 }
 
-/* ================= 编曲 ================= */
-/*
- * 调性：A 小调
- * 和弦进行：Am – F – Dm – E（自然小调，最"不安"的循环）
- * 场景强度：开场低 → 杠杆/借贷最高 → AI 科技感 → 洞察明亮 → 结尾收束
- */
+/* ================= 鼓组 ================= */
+function kick(t, gain) {
+  // 频率从 130Hz 扫到 42Hz
+  voice(t, 0.22, 130, { type: 'sin', gain: gain, a: 0.001, r: 0.02, decay: 16, slide: -0.68 });
+  // 点击感
+  noise(t, 0.02, gain * 0.35, { hp: 0.85, decay: 40 });
+}
+function snare(t, gain) {
+  noise(t, 0.14, gain * 0.7, { hp: 0.55, decay: 18 });
+  voice(t, 0.10, 190, { type: 'tri', gain: gain * 0.28, a: 0.001, r: 0.02, decay: 26 });
+}
+function hihat(t, gain, open) {
+  noise(t, open ? 0.14 : 0.035, gain * 0.30, { hp: 0.9, decay: open ? 12 : 45 });
+}
+function clap(t, gain) {
+  for (let k = 0; k < 3; k++) noise(t + k * 0.011, 0.10, gain * 0.30, { hp: 0.6, decay: 22 });
+}
+function crash(t, gain) {
+  noise(t, 1.1, gain * 0.30, { hp: 0.72, decay: 5 });
+}
 
-const AM = [57, 60, 64], F = [53, 57, 60], DM = [50, 53, 57], EM = [52, 55, 59];
-const ROOT = { Am: 45, F: 41, Dm: 38, Em: 40 };
-const PROG = [[AM, 'Am'], [F, 'F'], [DM, 'Dm'], [EM, 'Em']];
+/* ================= 和声 ================= */
+/* Am – F – C – G ：i – VI – III – VII，最"燃"的循环 */
+const CHORDS = [
+  { root: 45, notes: [57, 60, 64] },   // Am
+  { root: 41, notes: [53, 57, 60] },   // F
+  { root: 48, notes: [55, 60, 64] },   // C
+  { root: 43, notes: [55, 59, 62] },   // G
+];
+const chordAt = t => CHORDS[Math.floor(t / BAR) % CHORDS.length];
 
-/** 场景强度（0~1）：控制音量、音色、密度 */
+/* 段落强度（0~1） */
 const INTENSITY = [
-  [0, 0.05], [5, 0.18], [6, 0.25], [16, 0.35], [17, 0.45], [39, 0.55],
-  [40, 0.85], [56, 0.9], [57, 1.0], [71, 0.95], [72, 0.7], [91, 0.75],
-  [92, 0.5], [107, 0.6], [108, 0.35], [121, 0.15], [122, 0.0],
+  [0, 0.10], [4, 0.25], [6, 0.38], [16, 0.50], [17, 0.62], [39, 0.72],
+  [40, 1.00], [56, 1.00], [57, 1.05], [71, 1.00], [72, 0.62], [91, 0.68],
+  [92, 0.98], [107, 0.92], [108, 0.55], [118, 0.30], [122, 0.05],
 ];
 const ins = t => curve(INTENSITY, t);
 
-/** 是否有低音铺底 */
-const PAD_GAIN = [
-  [0, 0.0], [1.5, 0.10], [6, 0.13], [17, 0.15], [40, 0.20],
-  [57, 0.24], [72, 0.18], [92, 0.16], [108, 0.12], [121, 0.05], [122, 0]
+/* 鼓组密度：0=无 1=底鼓+拍手 2=加八分 3=加十六分 */
+const DRUM = [
+  [0, 0], [6, 0.4], [16, 1], [17, 1.4], [23, 2], [40, 3], [56, 3],
+  [57, 3], [71, 2.6], [72, 0.6], [79, 1.2], [91, 1.6], [92, 3], [107, 2],
+  [108, 1.4], [116, 0.5], [122, 0],
 ];
+const drumAmt = t => curve(DRUM, t);
 
-console.log('→ 合成和弦铺底 + 低音线');
+/* 主旋律动机（A 小调，强拍起） */
+const LEAD = [
+  [0, 76, 2], [2, 74, 1], [3, 72, 1],
+  [4, 69, 2], [6, 72, 1], [7, 74, 1],
+  [8, 76, 2], [10, 79, 2],
+  [12, 77, 2], [14, 76, 1], [15, 74, 1],
+];
+/* 高八度变奏（第三次 drop 用） */
+const LEAD_HI = LEAD.map(([b, n, d]) => [b, n + 12, d]);
+
+/* ================= 编曲 ================= */
+console.log('→ 和弦铺底（Pad）');
 {
-  // 每 4 秒一个和弦
-  const barLen = 3.4;
-  for (let t = 0; t < DUR - 0.2; t += barLen) {
-    const [chord, name] = PROG[Math.floor(t / barLen) % PROG.length];
-    const g = curve(PAD_GAIN, t) * (0.7 + ins(t) * 0.6);
-    // Pad：三个音，轻微失谐 + 慢包络
-    chord.forEach((n, k) => {
-      note(t, barLen * 1.05, midi(n), {
-        type: 'saw', gain: g * 0.13, a: 0.9 + k * 0.1, d: 0.6, s: 0.75, r: 1.1,
-        detune: 0.004, pan: (k - 1) * 0.5,
-      });
-      note(t, barLen * 1.05, midi(n - 12), {
-        type: 'tri', gain: g * 0.10, a: 1.1, d: 0.6, s: 0.7, r: 1.2, pan: (k - 1) * -0.4,
-      });
-    });
-    // 低音
-    note(t, barLen * 0.92, midi(ROOT[name]), {
-      type: 'sin', gain: g * 0.30, a: 0.02, d: 0.35, s: 0.55, r: 0.4,
-    });
-    note(t, barLen * 0.92, midi(ROOT[name] - 12), {
-      type: 'sin', gain: g * 0.22, a: 0.02, d: 0.35, s: 0.5, r: 0.4,
+  for (let t = 0; t < DUR; t += BAR) {
+    const ch = chordAt(t);
+    const g = 0.10 + ins(t) * 0.12;
+    const dur = BAR * 1.02;
+    ch.notes.forEach((n, k) => {
+      voice(t, dur, midi(n), { type: 'saw', gain: g * 0.30, a: 0.35, r: 0.5, detune: 0.006, pan: (k - 1) * 0.55 });
+      voice(t, dur, midi(n + 12), { type: 'tri', gain: g * 0.10, a: 0.5, r: 0.6, pan: (k - 1) * -0.3 });
     });
   }
 }
 
-console.log('→ 合成节奏脉冲');
+console.log('→ 贝斯线（八分音符推进）');
 {
-  const beat = 0.62;                        // ≈ 97 BPM
-  for (let t = 0; t < DUR; t += beat) {
+  for (let t = 0; t < DUR - 0.1; t += BEAT / 2) {
+    const amt = drumAmt(t);
+    if (amt < 0.4) continue;
+    const ch = chordAt(t);
+    // 八分音符：根音 / 高八度交替，强拍加重
+    const isDown = Math.abs((t / BEAT) % 1) < 0.02;
+    const oct = Math.abs((t / (BEAT * 2)) % 2) < 0.02 ? 0 : 12;
+    const g = (0.22 + ins(t) * 0.22) * (isDown ? 1 : 0.62) * clamp(amt / 2, 0.3, 1);
+    voice(t, BEAT * 0.42, midi(ch.root + oct), {
+      type: 'saw', gain: g * 0.5, a: 0.004, r: 0.04, decay: 7, pan: 0,
+    });
+  }
+}
+
+console.log('→ 鼓组');
+{
+  for (let t = 0; t < DUR - 0.05; t += BEAT) {
+    const amt = drumAmt(t);
+    if (amt <= 0.01) continue;
     const k = ins(t);
-    if (k < 0.2) continue;
-    const isDown = Math.abs((t / beat) % 4) < 0.01;
-    // 底鼓
-    if (isDown || k > 0.5) {
-      note(t, 0.20, midi(28), { type: 'sin', gain: 0.30 * k, a: 0.002, d: 0.10, s: 0.2, r: 0.10 });
+    const bi = Math.round(t / BEAT) % 4;
+    const g = 0.30 + k * 0.12;
+
+    // 底鼓：1、3 拍 + 驱动感的下拍
+    if (bi === 0 || bi === 2) kick(t, g * clamp(amt / 2, 0.25, 1.1));
+    if (amt > 2.4 && (bi === 1 || bi === 3)) kick(t, g * 0.35);
+
+    // 军鼓：2、4 拍
+    if ((bi === 1 || bi === 3) && amt > 0.8) snare(t, g * 0.9 * clamp(amt / 2, 0.3, 1));
+
+    // 拍手：加强 2、4
+    if ((bi === 1 || bi === 3) && amt > 2.2) clap(t, g * 0.55);
+
+    // 踩镲：八分
+    if (amt > 1.2) {
+      hihat(t, g * 0.5, false);
+      hihat(t + BEAT / 2, g * 0.34, false);
     }
-    // 高频 tick（8 分）
-    for (let sub = 0; sub < 2; sub++) {
-      const tt = t + sub * beat / 2;
-      if (tt >= DUR) break;
-      if (k < 0.3) continue;
-      noiseHit(tt, 0.05, 0.045 * k * (sub ? 0.6 : 1), { hp: 0.6 });
-      note(tt, 0.045, midi(96 + (sub ? 3 : 0)), { type: 'sqr', gain: 0.012 * k, pan: sub ? 0.4 : -0.4 });
+    // 十六分（密集段）
+    if (amt > 2.6) {
+      hihat(t + BEAT / 4, g * 0.22, true);
+      hihat(t + BEAT * 3 / 4, g * 0.22, true);
     }
   }
+
+  // 段落开头的 crash
+  [6, 17, 40, 57, 72, 92, 108].forEach(t => crash(t, 0.5 + ins(t) * 0.4));
 }
 
-console.log('→ 合成场景音效');
+console.log('→ 十六分琶音');
 {
-  // 开场低频心跳
-  for (let i = 0; i < 4; i++) {
-    const t = 0.6 + i * 1.35;
-    note(t, 0.30, midi(26), { type: 'sin', gain: 0.34, a: 0.005, d: 0.10, s: 0.25, r: 0.14 });
-    note(t + 0.26, 0.26, midi(24), { type: 'sin', gain: 0.22, a: 0.005, d: 0.08, s: 0.2, r: 0.12 });
+  for (let t = 0; t < DUR - 0.1; t += BEAT / 4) {
+    const amt = drumAmt(t);
+    if (amt < 1.6) continue;
+    const ch = chordAt(t);
+    const idx = Math.round(t / (BEAT / 4)) % (ch.notes.length * 2);
+    const n = ch.notes[idx % ch.notes.length] + (idx >= ch.notes.length ? 12 : 0);
+    const g = 0.018 + ins(t) * 0.030;
+    voice(t, BEAT * 0.22, midi(n + 12), {
+      type: 'sqr25', gain: g, a: 0.002, r: 0.03, decay: 18,
+      pan: Math.sin(t * 1.7) * 0.6,
+    });
   }
-
-  // 场景切换的 whoosh（噪声扫频感：用高通噪声 + 音量包络近似）
-  [6, 17, 21, 40, 57, 72, 92, 108].forEach(t => {
-    noiseHit(t - 0.18, 0.5, 0.10, { hp: 0.03, a: 0.20, d: 0.15 });
-    note(t - 0.10, 0.4, midi(40), { type: 'saw', gain: 0.06, a: 0.18, d: 0.1, s: 0.3, r: 0.2 });
-  });
-
-  // 杠杆爆仓：三声低频冲击（对应 10×/50×/100× 依次爆仓）
-  [53.0, 55.2, 57.4].forEach((t, i) => {
-    note(t, 0.55, midi(22 - i * 2), { type: 'sin', gain: 0.42, a: 0.002, d: 0.22, s: 0.3, r: 0.35 });
-    noiseHit(t, 0.30, 0.16, { hp: 0.5, a: 0.001, d: 0.10 });
-    note(t + 0.02, 0.35, midi(88), { type: 'sqr', gain: 0.02, a: 0.001, d: 0.15, s: 0.05, r: 0.15 });
-  });
-
-  // 借贷场景：算盘/计算器的细密点击
-  for (let t = 58.5; t < 71; t += 0.31) {
-    noiseHit(t, 0.035, 0.055, { hp: 0.75 });
-  }
-
-  // AI 场景：电子提示音
-  [74.5, 76.2, 78.0].forEach((t, i) => {
-    note(t, 0.18, midi(84 + i * 4), { type: 'tri', gain: 0.10, a: 0.005, d: 0.06, s: 0.2, r: 0.08, pan: 0.3 });
-  });
-
-  // 洞察场景：明亮的上行琶音
-  [93.6, 94.1, 94.6, 95.1].forEach((t, i) => {
-    note(t, 0.42, midi(69 + i * 4), { type: 'tri', gain: 0.12, a: 0.005, d: 0.12, s: 0.3, r: 0.25, pan: (i - 1.5) * 0.3 });
-  });
-
-  // 结尾：长音收束
-  note(112, 9.0, midi(45), { type: 'sin', gain: 0.20, a: 1.2, d: 1.0, s: 0.6, r: 4.0 });
-  note(112, 9.0, midi(52), { type: 'tri', gain: 0.13, a: 1.4, d: 1.0, s: 0.55, r: 4.0 });
-  note(112, 9.0, midi(57), { type: 'tri', gain: 0.10, a: 1.6, d: 1.0, s: 0.5, r: 4.0 });
 }
 
-/* ================= 混响（立体声延迟网） ================= */
-console.log('→ 混响与母带处理');
+console.log('→ 主旋律 Lead');
+{
+  // 第一次 drop（40s）与第二次（57s）：原调
+  [40, 57].forEach((base, ri) => {
+    for (let rep = 0; rep < 4; rep++) {
+      const off = base + rep * (BAR * 4);
+      if (off >= 92) break;
+      LEAD.forEach(([b, n, d]) => {
+        const t = off + b * (BEAT / 2);
+        if (t >= DUR) return;
+        const g = (0.10 + ri * 0.02) * (0.8 + ins(t) * 0.5);
+        voice(t, d * BEAT * 0.75, midi(n), {
+          type: 'sqr', gain: g, a: 0.004, r: 0.10, decay: 3.2, pan: -0.12,
+        });
+        voice(t, d * BEAT * 0.75, midi(n + 12), {
+          type: 'tri', gain: g * 0.35, a: 0.004, r: 0.10, decay: 4.5, pan: 0.25,
+        });
+      });
+    }
+  });
+
+  // 第三次 drop（92s）：升高八度，最亮
+  for (let rep = 0; rep < 4; rep++) {
+    const off = 92 + rep * (BAR * 4);
+    if (off >= 108) break;
+    LEAD_HI.forEach(([b, n, d]) => {
+      const t = off + b * (BEAT / 2);
+      if (t >= DUR) return;
+      voice(t, d * BEAT * 0.75, midi(n), {
+        type: 'sqr', gain: 0.095, a: 0.004, r: 0.10, decay: 3.0, pan: -0.1,
+      });
+      voice(t, d * BEAT * 0.75, midi(n + 12), {
+        type: 'tri', gain: 0.032, a: 0.004, r: 0.10, decay: 4.2, pan: 0.3,
+      });
+    });
+  }
+}
+
+console.log('→ 场景音效');
+{
+  // 开场：心跳 + 蓄力的上升音
+  for (let i = 0; i < 3; i++) {
+    const t = 0.5 + i * 1.25;
+    kick(t, 0.34); kick(t + 0.24, 0.22);
+  }
+  voice(0.2, 5.4, midi(45), { type: 'saw', gain: 0.05, a: 3.0, r: 1.2, decay: 0.2 });
+
+  // 每次 drop 前的 riser（上升噪声）
+  [38.5, 55.5, 90.5].forEach(t => {
+    noise(t, 1.9, 0.09, { hp: 0.05, decay: -1.6 });   // 负衰减 = 渐强
+  });
+
+  // 爆仓三连（53 / 55.2 / 57.4s）
+  [53.0, 55.2, 57.4].forEach((t, i) => {
+    voice(t, 0.6, midi(26 - i * 2), { type: 'sin', gain: 0.42, a: 0.001, r: 0.05, decay: 7, slide: -0.35 });
+    noise(t, 0.35, 0.20, { hp: 0.5, decay: 16 });
+    voice(t + 0.01, 0.5, midi(90), { type: 'sqr25', gain: 0.020, a: 0.001, r: 0.2, decay: 9 });
+  });
+
+  // 借贷：细密计算器点击
+  for (let t = 58.5; t < 71; t += BEAT / 4) {
+    noise(t, 0.02, 0.030, { hp: 0.85, decay: 60 });
+  }
+
+  // AI：电子提示
+  [74.4, 76.1, 77.8].forEach((t, i) => {
+    voice(t, 0.16, midi(86 + i * 5), { type: 'sqr25', gain: 0.055, a: 0.002, r: 0.05, decay: 14, pan: 0.35 });
+  });
+
+  // 洞察：明亮上行
+  [93.2, 93.7, 94.2, 94.7, 95.2].forEach((t, i) => {
+    voice(t, 0.5, midi(72 + i * 3), { type: 'tri', gain: 0.075, a: 0.003, r: 0.2, decay: 5, pan: (i - 2) * 0.25 });
+  });
+
+  // 结尾：大三和弦长音收束
+  [110, 115.5].forEach((t, i) => {
+    [57, 61, 64].forEach((n, k) => {
+      voice(t, 6.0 - i, midi(n), { type: 'tri', gain: 0.055, a: 0.8, r: 2.2, pan: (k - 1) * 0.4 });
+    });
+  });
+}
+
+/* ================= 混响 ================= */
+console.log('→ 混响与母带');
 {
   const wet = new Float32Array(N), wetR = new Float32Array(N);
-  const taps = [[0.029, 0.34], [0.041, 0.28], [0.057, 0.22], [0.073, 0.16]];
+  const taps = [[0.023, 0.32], [0.037, 0.26], [0.053, 0.19], [0.071, 0.13], [0.097, 0.08]];
   for (const [dly, g] of taps) {
     const d = Math.floor(dly * SR);
     for (let i = d; i < N; i++) {
@@ -244,47 +352,36 @@ console.log('→ 混响与母带处理');
     }
   }
   for (let i = 0; i < N; i++) {
-    bufL[i] = bufL[i] * 0.86 + wet[i] * 0.30;
-    bufR[i] = bufR[i] * 0.86 + wetR[i] * 0.30;
+    bufL[i] = bufL[i] * 0.88 + wet[i] * 0.26;
+    bufR[i] = bufR[i] * 0.88 + wetR[i] * 0.26;
   }
 }
 
-/* 总音量归一 + 软削波 */
 {
   let peak = 0;
   for (let i = 0; i < N; i++) peak = Math.max(peak, Math.abs(bufL[i]), Math.abs(bufR[i]));
-  const target = 0.82;
-  const g = peak > 0 ? target / peak : 1;
+  const g = peak > 0 ? 0.90 / peak : 1;
   for (let i = 0; i < N; i++) {
-    bufL[i] = Math.tanh(bufL[i] * g * 1.1) * 0.95;
-    bufR[i] = Math.tanh(bufR[i] * g * 1.1) * 0.95;
+    bufL[i] = Math.tanh(bufL[i] * g * 1.15) * 0.96;
+    bufR[i] = Math.tanh(bufR[i] * g * 1.15) * 0.96;
   }
-  console.log(`   峰值归一：${peak.toFixed(3)} → ${target}`);
+  console.log(`   峰值 ${peak.toFixed(3)} → 归一化`);
 }
 
 /* ================= 写 WAV ================= */
 function writeWav(file, L, R) {
-  const n = L.length;
-  const dataBytes = n * 2 * 2;
+  const n = L.length, dataBytes = n * 4;
   const buf = Buffer.alloc(44 + dataBytes);
-  buf.write('RIFF', 0, 'ascii');
-  buf.writeUInt32LE(36 + dataBytes, 4);
-  buf.write('WAVE', 8, 'ascii');
-  buf.write('fmt ', 12, 'ascii');
-  buf.writeUInt32LE(16, 16);
-  buf.writeUInt16LE(1, 20);          // PCM
-  buf.writeUInt16LE(2, 22);          // 立体声
-  buf.writeUInt32LE(SR, 24);
-  buf.writeUInt32LE(SR * 2 * 2, 28);
-  buf.writeUInt16LE(4, 32);
-  buf.writeUInt16LE(16, 34);
-  buf.write('data', 36, 'ascii');
-  buf.writeUInt32LE(dataBytes, 40);
+  buf.write('RIFF', 0, 'ascii'); buf.writeUInt32LE(36 + dataBytes, 4);
+  buf.write('WAVE', 8, 'ascii'); buf.write('fmt ', 12, 'ascii');
+  buf.writeUInt32LE(16, 16); buf.writeUInt16LE(1, 20); buf.writeUInt16LE(2, 22);
+  buf.writeUInt32LE(SR, 24); buf.writeUInt32LE(SR * 4, 28);
+  buf.writeUInt16LE(4, 32); buf.writeUInt16LE(16, 34);
+  buf.write('data', 36, 'ascii'); buf.writeUInt32LE(dataBytes, 40);
   let o = 44;
   for (let i = 0; i < n; i++) {
-    const l = clamp(L[i], -1, 1), r = clamp(R[i], -1, 1);
-    buf.writeInt16LE(Math.round(l * 32767), o); o += 2;
-    buf.writeInt16LE(Math.round(r * 32767), o); o += 2;
+    buf.writeInt16LE(Math.round(clamp(L[i], -1, 1) * 32767), o); o += 2;
+    buf.writeInt16LE(Math.round(clamp(R[i], -1, 1) * 32767), o); o += 2;
   }
   fs.writeFileSync(file, buf);
   return buf.length;
@@ -293,5 +390,4 @@ function writeWav(file, L, R) {
 const out = process.env.OUT || path.join(path.dirname(__dirname), 'dist', 'score.wav');
 fs.mkdirSync(path.dirname(out), { recursive: true });
 const bytes = writeWav(out, bufL, bufR);
-console.log(`✓ 音轨已生成：${out}`);
-console.log(`  ${(bytes / 1048576).toFixed(1)} MB / ${DUR}s / 44.1kHz 立体声`);
+console.log(`✓ 音轨已生成：${out}  (${(bytes / 1048576).toFixed(1)} MB / ${DUR}s)`);
