@@ -41,8 +41,26 @@ const PAIRS = {
     desc: '南非兰特兑日元。超级高息货币，能吃到惊人利息，也能一口气全吐回去。',
     lotUnit: 10000,
   },
+  AUDJPY: {
+    id: 'AUDJPY', name: '豪ドル/円', short: 'AUD/JPY', price: 85.40, digits: 3, pip: 0.01,
+    spread: 0.009, vol: 0.0024, swapL: 0.000012, swapS: -0.000022, icon: 'A', color: '#5ee7df',
+    desc: '澳元兑日元。资源货币，跟大宗商品和中国经济走。利息是正的——做多能收钱。',
+    lotUnit: 10000,
+  },
+  TRYJPY: {
+    id: 'TRYJPY', name: 'トルコリラ/円', short: 'TRY/JPY', price: 4.180, digits: 3, pip: 0.001,
+    spread: 0.008, vol: 0.0075, swapL: 0.000420, swapS: -0.000560, icon: '₺', color: '#ff6b6b',
+    desc: '土耳其里拉兑日元。年利差几十个点，套息交易者的天堂——也是坟场。波动是美元日元的五倍。',
+    lotUnit: 10000,
+  },
+  MXNJPY: {
+    id: 'MXNJPY', name: 'メキシコペソ/円', short: 'MXN/JPY', price: 5.820, digits: 3, pip: 0.001,
+    spread: 0.006, vol: 0.0058, swapL: 0.000220, swapS: -0.000310, icon: 'M', color: '#f7b731',
+    desc: '墨西哥比索兑日元。日本散户最爱的「高息提款机」，但它的暴跌从不提前通知。',
+    lotUnit: 10000,
+  },
 };
-const PAIR_ORDER = ['USDJPY', 'EURJPY', 'GBPJPY', 'CHFJPY', 'ZARJPY'];
+const PAIR_ORDER = ['USDJPY', 'EURJPY', 'GBPJPY', 'CHFJPY', 'ZARJPY', 'AUDJPY', 'TRYJPY', 'MXNJPY'];
 
 /* ---------- 新闻事件库 ---------- */
 const NEWS_POOL = [

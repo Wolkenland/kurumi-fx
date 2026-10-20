@@ -651,6 +651,16 @@ const UI = {
         setTimeout(() => Sheets.msg('取立て', `【${ev.def.name}】的催收来了。<br>当前负债 <b class="mono" style="color:var(--dn)">${U.fmt(ev.amount)} 円</b>。<br>${ev.def.danger >= 4 ? '「再不还，就不是钱的问题了。」' : '「还款日到了哦。」'}`, ev.def.danger >= 4 ? 'bad' : 'warn'), 400);
         break;
       }
+      case 'achievement': {
+        const list = ev.list || [];
+        if (list.length) {
+          const names = list.map(a => a.name).join('、');
+          const pts = list.reduce((a, x) => a + x.pts, 0);
+          this.toast(`🏆 成就解锁：${names}　+${pts} 洞察`, 'up');
+          Sfx.bigwin();
+        }
+        break;
+      }
       case 'levelup': {
         Sfx.bigwin();
         Sheets.msg('LEVEL UP',
@@ -910,6 +920,11 @@ const UI = {
       <div style="margin-top:10px;font-size:11px;color:var(--tx3);line-height:1.6">
         冷静值越低，越容易做出"再加仓一点"的决定；贪欲越高，杠杆会越抬越高。
       </div>
+      <div class="row" style="margin-top:10px;gap:8px">
+        <button class="btn btn-ghost btn-sm" id="btnAch" style="flex:1">
+          🏆 成就 <b style="color:var(--gold)">${(c.st.achievements || []).length}</b>/${ACHIEVEMENTS.length}</button>
+        <button class="btn btn-ghost btn-sm" id="btnStats" style="flex:1">📊 交易统计</button>
+      </div>
       <div style="margin-top:10px;padding:9px 11px;border-radius:11px;
         background:rgba(140,180,255,.07);border:1px solid rgba(140,180,255,.22);font-size:11px;line-height:1.72">
         <b style="color:var(--blue)">等级有什么用</b><br>
@@ -976,6 +991,12 @@ const UI = {
         <span>${PAIRS[r.pid].short} ${r.lev}× ${mrk}</span>
         <span class="a mono ${r.pnl >= 0 ? 'tick-up' : 'tick-dn'}">${U.sfmt(r.pnl)}</span></div>`;
     }).join('') : '<div class="empty">还没有平仓记录。</div>';
+
+    // 成就 / 统计入口（每次渲染都要重新绑定，因为 innerHTML 被整体替换）
+    const ba = $$('#btnAch');
+    if (ba) bindTap(ba, () => Sheets.achievements(c));
+    const bs = $$('#btnStats');
+    if (bs) bindTap(bs, () => Sheets.stats(c));
   },
 
   /* ---------- 设定屏 ---------- */
@@ -1250,6 +1271,104 @@ const Sheets = {
     $('#shOk', sh).addEventListener('click', () => this.close());
     Haptics[good ? 'win' : 'lose']();
   },
+  /** 成就抽屉 */
+  achievements(core) {
+    const sum = core.achSummary();
+    let filter = 'all';
+    const render = () => {
+      const list = ACHIEVEMENTS.filter(a => filter === 'all' || a.cat === filter);
+      const catBtns = [['all', '全部', '#e8eefc', sum.done + '/' + sum.total]]
+        .concat(Object.keys(ACH_CATS).map(k =>
+          [k, ACH_CATS[k].name, ACH_CATS[k].color, sum.byCat[k].done + '/' + sum.byCat[k].total]));
+      const rows = list.map(a => {
+        const got = core.hasAch(a.id);
+        const cc = ACH_CATS[a.cat].color;
+        return `<div style="display:flex;align-items:flex-start;gap:10px;padding:9px 0;
+            border-bottom:1px solid rgba(255,255,255,.05);${got ? '' : 'opacity:.55'}">
+          <div style="flex:0 0 auto;width:26px;height:26px;border-radius:8px;display:flex;
+            align-items:center;justify-content:center;font-size:13px;font-weight:800;
+            background:${got ? cc + '33' : 'rgba(255,255,255,.05)'};
+            color:${got ? cc : 'var(--tx3)'};border:1px solid ${got ? cc + '77' : 'rgba(255,255,255,.1)'}">
+            ${got ? '✓' : '·'}</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:12.5px;font-weight:700;color:${got ? 'var(--tx)' : 'var(--tx2)'}">
+              ${a.name}<span class="tag" style="margin-left:6px;font-size:9px;
+                background:${cc}22;color:${cc};border-color:${cc}55">${ACH_CATS[a.cat].name}</span>
+            </div>
+            <div style="font-size:10.5px;color:var(--tx3);margin-top:2px">${a.desc}</div>
+          </div>
+          <div style="flex:0 0 auto;font-size:11px;font-weight:700;
+            color:${got ? 'var(--gold)' : 'var(--tx3)'}">+${a.pts}</div>
+        </div>`;
+      }).join('');
+
+      const sh = Sheets.base(`
+        <h3>🏆 成就 <span style="font-size:13px;color:var(--gold);margin-left:6px">${sum.done} / ${sum.total}</span></h3>
+        <div class="sub">解锁成就可得洞察点 —— 1 点可换 10 万円，也能买永久技能。</div>
+        <div class="row" style="flex-wrap:wrap;gap:6px;margin:8px 0">
+          ${catBtns.map(([k, name, col, cnt]) => `
+            <button class="btn btn-xs ${filter === k ? 'btn-gold' : 'btn-ghost'}"
+              data-cat="${k}" style="${filter === k ? '' : `color:${col};border-color:${col}44`}">
+              ${name} ${cnt}</button>`).join('')}
+        </div>
+        <div style="max-height:52vh;overflow-y:auto">${rows}</div>
+        <button class="btn btn-ghost" id="achClose" style="width:100%;margin-top:10px">关闭</button>`);
+
+      $$$('[data-cat]', sh).forEach(b => bindTap(b, () => { filter = b.dataset.cat; render(); }));
+      $$('#achClose', sh).addEventListener('click', () => Sheets.close());
+    };
+    render();
+  },
+
+  /** 交易统计抽屉 */
+  stats(core) {
+    const S = core.st.stats;
+    const trades = S.trades || 0;
+    const winRate = trades > 0 ? (S.wins / trades * 100) : 0;
+    const avgHold = (S.holdCount || 0) > 0 ? (S.holdMs / S.holdCount / 1000) : 0;
+    const pairsTried = Object.keys(S.pairsTried || {}).length;
+    const total = PAIR_ORDER.length;
+
+    const kpi = (k, v, color) => `<div style="display:flex;justify-content:space-between;
+      padding:7px 0;border-bottom:1px solid rgba(255,255,255,.05)">
+      <span style="font-size:11.5px;color:var(--tx2)">${k}</span>
+      <b class="mono" style="font-size:12.5px;color:${color || 'var(--tx)'}">${v}</b></div>`;
+
+    const byPair = PAIR_ORDER.map(id => {
+      const d = S.byPair && S.byPair[id];
+      if (!d) return null;
+      const def = PAIRS[id];
+      return `<div style="display:flex;justify-content:space-between;align-items:center;
+          padding:6px 0;border-bottom:1px solid rgba(255,255,255,.04)">
+        <span style="font-size:11px;color:${def.color}">${def.short}</span>
+        <span style="font-size:10.5px;color:var(--tx3)">${d.n} 笔 · 胜 ${d.wins}</span>
+        <b class="mono" style="font-size:11.5px;color:${d.pnl >= 0 ? 'var(--up)' : 'var(--dn)'}">
+          ${d.pnl >= 0 ? '+' : ''}${U.yenShort(d.pnl)}</b></div>`;
+    }).filter(Boolean).join('') || '<div style="font-size:11px;color:var(--tx3)">还没交易过</div>';
+
+    const sh = Sheets.base(`
+      <h3>📊 交易统计</h3>
+      <div class="sub">这些数字不会骗你。它们也是你亏钱的证据。</div>
+      <div style="margin-top:6px">
+        ${kpi('总交易次数', trades)}
+        ${kpi('胜率', winRate.toFixed(0) + '%', winRate >= 50 ? 'var(--up)' : 'var(--dn)')}
+        ${kpi('胜 / 负', (S.wins || 0) + ' / ' + (S.losses || 0))}
+        ${kpi('最长连胜', (S.maxStreak || 0) + ' 场', (S.maxStreak || 0) >= 3 ? 'var(--gold)' : '')}
+        ${kpi('单笔最大盈利', (S.bestProfit > 0 ? '+' : '') + U.fmt(S.bestProfit), 'var(--up)')}
+        ${kpi('单笔最大亏损', U.fmt(S.worstLoss), 'var(--dn)')}
+        ${kpi('累计盈亏', (S.totalPnl >= 0 ? '+' : '') + U.fmt(S.totalPnl), S.totalPnl >= 0 ? 'var(--up)' : 'var(--dn)')}
+        ${kpi('最大回撤', (S.maxDrawdown || 0).toFixed(1) + '%', (S.maxDrawdown || 0) > 30 ? 'var(--dn)' : '')}
+        ${kpi('平均持仓时长', avgHold > 0 ? (avgHold < 60 ? avgHold.toFixed(0) + ' 秒' : (avgHold / 60).toFixed(1) + ' 分钟') : '—')}
+        ${kpi('用过的最大杠杆', (S.maxLev || 1) + ' 倍', (S.maxLev || 1) >= 50 ? 'var(--dn)' : '')}
+        ${kpi('交易过的品种', pairsTried + ' / ' + total)}
+        ${kpi('被强平次数', S.liquidated || 0, (S.liquidated || 0) > 0 ? 'var(--dn)' : '')}
+      </div>
+      <div style="margin-top:12px;font-size:11px;font-weight:700;color:var(--tx3)">分品种盈亏</div>
+      <div>${byPair}</div>
+      <button class="btn btn-ghost" id="statClose" style="width:100%;margin-top:10px">关闭</button>`);
+    $$('#statClose', sh).addEventListener('click', () => Sheets.close());
+  },
+
   /** 存档管理抽屉 */
   slots(core) {
     const fmtTime = (ts) => {

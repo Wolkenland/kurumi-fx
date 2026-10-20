@@ -113,7 +113,7 @@ const $$ = (s) => Array.from(document.querySelectorAll(s));
   console.log('\n=== 3. 界面骨架 ===');
   chk('5 个屏幕已创建', $$('.screen').length === 5, $$('.screen').length + ' 个');
   chk('5 个底部标签已创建', $$('#tabs button').length === 5);
-  chk('相机图 tabs 已渲染（5 个货币对）', $$('#pairTabs .pair-tab').length === 5,
+  chk('相机图 tabs 已渲染（8 个货币对）', $$('#pairTabs .pair-tab').length === 8,
     $$('#pairTabs .pair-tab').length + ' 个');
   chk('下单面板已渲染', !!$('#btnBuy') && !!$('#btnSell'));
   chk('杠杆滑块存在', !!$('#levRange'));

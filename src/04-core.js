@@ -35,6 +35,94 @@ const LOAN_PRODUCTS = [
 ];
 
 /* ---------- 角色对白（随状态变化） ---------- */
+/* ================= 成就系统 ================= */
+/**
+ * 30 个成就，分 4 类。达成即给洞察点（可换钱 / 买永久技能）。
+ * cat: trade 交易 / survive 生存 / danger 作死 / explore 探索
+ */
+const ACHIEVEMENTS = [
+  /* ---- 交易 ---- */
+  { id: 'first_open',   cat: 'trade', pts: 1, name: '第一笔',       desc: '开出第一笔仓位',
+    test: c => c.st.stats.trades >= 0 && c.st.stats.opened >= 1 },
+  { id: 'first_win',    cat: 'trade', pts: 1, name: '第一次盈利',   desc: '平仓并盈利',
+    test: c => c.st.stats.wins >= 1 },
+  { id: 'first_loss',   cat: 'trade', pts: 1, name: '第一次亏损',   desc: '平仓并亏损',
+    test: c => c.st.stats.losses >= 1 },
+  { id: 'ten_win',      cat: 'trade', pts: 2, name: '十胜',         desc: '累计盈利平仓 10 次',
+    test: c => c.st.stats.wins >= 10 },
+  { id: 'hundred_trade',cat: 'trade', pts: 4, name: '百战',         desc: '累计平仓 100 次',
+    test: c => c.st.stats.trades >= 100 },
+  { id: 'streak3',      cat: 'trade', pts: 2, name: '三连胜',       desc: '连续 3 次盈利平仓',
+    test: c => c.st.stats.maxStreak >= 3 },
+  { id: 'streak5',      cat: 'trade', pts: 3, name: '五连胜',       desc: '连续 5 次盈利平仓',
+    test: c => c.st.stats.maxStreak >= 5 },
+  { id: 'profit100k',   cat: 'trade', pts: 2, name: '十万',         desc: '单笔盈利 10 万円',
+    test: c => c.st.stats.bestProfit >= 100000 },
+  { id: 'profit500k',   cat: 'trade', pts: 4, name: '五十万',       desc: '单笔盈利 50 万円',
+    test: c => c.st.stats.bestProfit >= 500000 },
+  { id: 'profit1m',     cat: 'trade', pts: 6, name: '百万',         desc: '单笔盈利 100 万円',
+    test: c => c.st.stats.bestProfit >= 1000000 },
+
+  /* ---- 生存 ---- */
+  { id: 'day7',         cat: 'survive', pts: 1, name: '活过一周',   desc: '游戏内度过 7 天',
+    test: c => c.st.date.day >= 7 },
+  { id: 'day30',        cat: 'survive', pts: 3, name: '活过一月',   desc: '游戏内度过 30 天',
+    test: c => c.st.date.day >= 30 },
+  { id: 'day100',       cat: 'survive', pts: 6, name: '百日',       desc: '游戏内度过 100 天',
+    test: c => c.st.date.day >= 100 },
+  { id: 'equity500k',   cat: 'survive', pts: 2, name: '五十万',     desc: '净值达到 50 万円',
+    test: c => c.netAsset() >= 500000 },
+  { id: 'equity1m',     cat: 'survive', pts: 4, name: '一百万',     desc: '净值达到 100 万円',
+    test: c => c.netAsset() >= 1000000 },
+  { id: 'equity10m',    cat: 'survive', pts: 8, name: '一千万',     desc: '净值达到 1000 万円',
+    test: c => c.netAsset() >= 10000000 },
+  { id: 'debt_free',    cat: 'survive', pts: 5, name: '无债一身轻', desc: '把所有借款还清',
+    test: c => c.st.flags.hasBorrowed && c.totalLoan() <= 0 },
+  { id: 'clean30',      cat: 'survive', pts: 3, name: '无债一月',   desc: '不负债活过 30 天',
+    test: c => c.st.date.day >= 30 && c.totalLoan() <= 0 },
+  { id: 'calm1',        cat: 'survive', pts: 3, name: '心如止水',   desc: '冷静值保持在 90 以上度过 15 天',
+    test: c => c.st.date.day >= 15 && c.st.stats.mental >= 90 },
+
+  /* ---- 作死 ---- */
+  { id: 'first_liq',    cat: 'danger', pts: 1, name: '第一次爆仓', desc: '被强制平仓',
+    test: c => c.st.stats.liquidated >= 1 },
+  { id: 'liq5',         cat: 'danger', pts: 2, name: '五次爆仓',   desc: '被强制平仓 5 次',
+    test: c => c.st.stats.liquidated >= 5 },
+  { id: 'liq20',        cat: 'danger', pts: 5, name: '二十次',     desc: '被强制平仓 20 次',
+    test: c => c.st.stats.liquidated >= 20 },
+  { id: 'debt1m',       cat: 'danger', pts: 3, name: '负债百万',   desc: '总负债达到 100 万円',
+    test: c => c.totalLoan() >= 1000000 },
+  { id: 'debt10m',      cat: 'danger', pts: 6, name: '负债千万',   desc: '总负债达到 1000 万円',
+    test: c => c.totalLoan() >= 10000000 },
+  { id: 'loss500k',     cat: 'danger', pts: 2, name: '五十万的教训', desc: '单笔亏损 50 万円',
+    test: c => c.st.stats.worstLoss <= -500000 },
+  { id: 'margin_call',  cat: 'danger', pts: 2, name: '追证',       desc: '被要求追加保证金',
+    test: c => c.st.stats.marginCalls >= 1 },
+  { id: 'all_in',       cat: 'danger', pts: 3, name: '满仓',       desc: '维持率跌到 110% 以下',
+    test: c => c.hasPosition() && c.marginRate() <= 110 },
+
+  /* ---- 探索 ---- */
+  { id: 'all_pairs',    cat: 'explore', pts: 4, name: '八面玲珑',  desc: '交易过全部 8 个品种',
+    test: c => PAIR_ORDER.every(id => c.st.stats.pairsTried && c.st.stats.pairsTried[id]) },
+  { id: 'lev100',       cat: 'explore', pts: 3, name: '百倍勇气',   desc: '用 100 倍杠杆开过仓',
+    test: c => c.st.stats.maxLev >= 100 },
+  { id: 'lev1',         cat: 'explore', pts: 2, name: '老实人',     desc: '用 1 倍杠杆开过仓',
+    test: c => c.st.stats.usedLev1 === true },
+  { id: 'four_pos',     cat: 'explore', pts: 2, name: '四手联弹',   desc: '同时持有 4 笔仓位',
+    test: c => c.st.stats.maxPositions >= 4 },
+  { id: 'all_loans',    cat: 'explore', pts: 3, name: '全渠道',     desc: '借遍所有借贷渠道',
+    test: c => LOAN_PRODUCTS.every(d => c.st.stats.loansTaken && c.st.stats.loansTaken[d.id]) },
+  { id: 'perk_max',     cat: 'explore', pts: 5, name: '技能大师',   desc: '把任意一个技能升到满级',
+    test: c => ['fees','rebate','intel','credit','swap','guts'].some(k => (c.st.perks[k] || 0) >= c.perkMax(k)) },
+];
+
+const ACH_CATS = {
+  trade:   { name: '交易', color: '#3ddc97' },
+  survive: { name: '生存', color: '#8cb4ff' },
+  danger:  { name: '作死', color: '#ff4d6d' },
+  explore: { name: '探索', color: '#ffd166' },
+};
+
 const BARKS = {
   mochiko: {
     idle: ['「你今天的手，在抖。」', '「市场不会因为你可怜就上涨。」', '「赔钱的人才是最诚实的。」'],
@@ -77,7 +165,21 @@ function initialState() {
     swapToday: 0,
     stats: { level: 1, xp: 0, wins: 0, losses: 0, bestProfit: 0, worstLoss: 0,
              totalPnl: 0, liquidated: 0, mental: 100, greed: 0, insight: 0, daysPlayed: 0,
-             peakEquity: 300000, streak: 0 },
+             peakEquity: 300000, streak: 0, maxStreak: 0,
+             // —— 1.3.0 统计扩展 ——
+             trades: 0,            // 总交易（平仓）次数
+             pairsTried: {},       // 交易过的品种
+             maxLev: 1,            // 用过的最大杠杆
+             maxPositions: 0,      // 同时持有的最大仓位数
+             loansTaken: {},       // 用过的借贷渠道
+             maxDrawdown: 0,       // 最大回撤（%）
+             marginCalls: 0,       // 被追证次数
+             holdMs: 0,            // 累计持仓时长（ms）
+             holdCount: 0,         // 时长统计样本数
+             perksBought: 0, byPair: {} },  // 买过多少次技能 / 分品种统计
+    achievements: [],              // 已解锁的成就 id
+    dailyTask: null,               // 每日任务
+    dailyDone: 0,
     flags: { tutorial: false, metMochiko: false, metMebuki: false, mochikoDeal: false,
              metYasuko: false, hasJob: true, despairSeen: false, dadMoney: false,
              fxQuit: false, prologue: false },
@@ -95,7 +197,6 @@ function initialState() {
     settings: { sfx: true, haptics: true, ma: true, effects: true, speedIdx: 1 },
     tutorials: {},            // 已读教学
     chapterDone: {},
-    achievements: {},
   };
 }
 
@@ -209,6 +310,45 @@ class Core {
     this.st.insightPts += n;
     this.emit('insight', { n, why, total: this.st.insightPts });
     return this.st.insightPts;
+  }
+
+  /* ===== 成就 ===== */
+  hasAch(id) { return this.st.achievements.indexOf(id) >= 0; }
+
+  /** 检查并解锁成就，返回本次新解锁的列表 */
+  checkAchievements() {
+    if (this.agent) return [];
+    if (!Array.isArray(this.st.achievements)) this.st.achievements = [];
+    const got = [];
+    for (const a of ACHIEVEMENTS) {
+      if (this.hasAch(a.id)) continue;
+      let ok = false;
+      try { ok = !!a.test(this); } catch (e) { ok = false; }
+      if (ok) {
+        this.st.achievements.push(a.id);
+        this.st.insightPts += a.pts;
+        got.push(a);
+      }
+    }
+    if (got.length) {
+      this.fx('bigwin'); this.hap('win');
+      got.forEach(a => this.pushLog('ach', `成就解锁：${a.name}（+${a.pts} 洞察）`, 0));
+      this.emit('achievement', { list: got });
+    }
+    return got;
+  }
+
+  /** 成就进度（用于界面展示） */
+  achSummary() {
+    const total = ACHIEVEMENTS.length;
+    const done = (this.st.achievements || []).length;
+    const byCat = {};
+    for (const k in ACH_CATS) byCat[k] = { done: 0, total: 0 };
+    for (const a of ACHIEVEMENTS) {
+      byCat[a.cat].total++;
+      if (this.hasAch(a.id)) byCat[a.cat].done++;
+    }
+    return { total, done, byCat };
   }
 
   /* ===== 事件总线 ===== */
@@ -331,6 +471,7 @@ class Core {
     this.st.stats.greed = U.clamp(this.st.stats.greed - 0.5, 0, 100);
 
     this.emit('newday', { day: d });
+    this.checkAchievements();
     this.save();
   }
 
@@ -384,10 +525,19 @@ class Core {
     };
     this.st.positions.push(pos);
     this.st.cash -= margin;
+    // —— 统计埋点 ——
+    const st2 = this.st.stats;
+    st2.opened = (st2.opened || 0) + 1;
+    st2.pairsTried = st2.pairsTried || {};
+    st2.pairsTried[pid] = true;
+    st2.maxLev = Math.max(st2.maxLev || 1, lev);
+    if (lev === 1) st2.usedLev1 = true;
+    st2.maxPositions = Math.max(st2.maxPositions || 0, this.st.positions.length + 1);
     this.st.stats.greed = U.clamp(this.st.stats.greed + (lev >= 25 ? 2.5 : lev >= 10 ? 1.2 : 0.4), 0, 100);
     this.pushLog(dir > 0 ? 'buy' : 'sell', `${s.def.short} ${dir > 0 ? '买' : '卖'} ${U.fmt(units)}通貨 ×${lev}倍`, 0);
     this.fx('buy'); this.hap('press');
     this.emit('open', { pos });
+    this.checkAchievements();
     this.save();
     return { ok: true, pos };
   }
@@ -406,8 +556,30 @@ class Core {
     this.st.cash += marginBack + pnl;
     this.st.stats.totalPnl += pnl;
     this.recentPnl = pnl;
-    if (pnl > 0) { this.st.stats.wins++; this.st.stats.streak = Math.max(1, this.st.stats.streak + 1); }
-    else { this.st.stats.losses++; this.st.stats.streak = Math.min(-1, this.st.stats.streak - 1); }
+    const S = this.st.stats;
+    S.trades = (S.trades || 0) + 1;
+    if (pnl > 0) {
+      S.wins++; S.streak = Math.max(1, S.streak + 1);
+      S.maxStreak = Math.max(S.maxStreak || 0, S.streak);
+    } else {
+      S.losses++; S.streak = Math.min(-1, S.streak - 1);
+    }
+    // 回撤记录
+    const eq = this.equity();
+    S.peakEquity = Math.max(S.peakEquity || eq, eq);
+    if (S.peakEquity > 0) {
+      const dd = (1 - eq / S.peakEquity) * 100;
+      S.maxDrawdown = Math.max(S.maxDrawdown || 0, dd);
+    }
+    // 分品种统计
+    if (!S.byPair) S.byPair = {};
+    const bp = S.byPair[p.pid] || (S.byPair[p.pid] = { n: 0, pnl: 0, wins: 0 });
+    bp.n++; bp.pnl += pnl; if (pnl > 0) bp.wins++;
+    // 持仓时长
+    if (p.openedAt) {
+      S.holdMs = (S.holdMs || 0) + Math.max(0, Date.now() - p.openedAt);
+      S.holdCount = (S.holdCount || 0) + 1;
+    }
     if (pnl > this.st.stats.bestProfit) this.st.stats.bestProfit = pnl;
     if (pnl < this.st.stats.worstLoss) this.st.stats.worstLoss = pnl;
 
@@ -428,6 +600,7 @@ class Core {
     else { this.st.stats.mental = U.clamp(this.st.stats.mental - Math.min(12, Math.abs(pnl) / 20000 + 2), 0, 100); this.fx('lose'); }
     this.hap('tap');
     this.emit('close', { rec, pnl });
+    this.checkAchievements();
     this.save();
     return { ok: true, pnl, rec };
   }
@@ -452,6 +625,7 @@ class Core {
     this.st.stats.totalPnl += pnl;
     this.st.stats.mental = U.clamp(this.st.stats.mental - 18 * this.mentalLossMul(), 0, 100);
     this.st.stats.liquidated++;
+    this.checkAchievements();
     if (pnl < this.st.stats.worstLoss) this.st.stats.worstLoss = pnl;
     const i = this.st.positions.indexOf(p);
     if (i >= 0) this.st.positions.splice(i, 1);
@@ -516,6 +690,7 @@ class Core {
     }
     const callLine = Math.max(92, 100 - (this.st.stats.level - 1) * 0.8);
     if (rate <= callLine && (!this.marginCall || this.marginCall.level !== 1)) {
+      this.st.stats.marginCalls = (this.st.stats.marginCalls || 0) + 1;
       this.marginCall = { level: 1, rate };
       this.fx('alarm'); this.hap('lose');
       this.emit('margincall', { level: 1, rate });
@@ -567,6 +742,9 @@ class Core {
     const got = amount - fee;
     this.st.loans.push({ pid, amount, since: this.st.date.day, rollDay: this.st.date.day + def.grace, principal: amount });
     this.st.wallet += got;
+    this.st.stats.loansTaken = this.st.stats.loansTaken || {};
+    this.st.stats.loansTaken[pid] = true;
+    this.st.flags.hasBorrowed = true;
     this.st.stats.mental = U.clamp(this.st.stats.mental - (def.danger >= 4 ? 6 : 3), 0, 100);
     this.st.stats.greed = U.clamp(this.st.stats.greed + def.danger, 0, 100);
     this.pushLog('loan', `${def.name} 借入 ${U.fmt(amount)} 円（手数料 ${U.fmt(fee)}）`, 0);
@@ -574,6 +752,7 @@ class Core {
     if (pid === 'mochiko') { this.st.flags.mochikoDeal = true; this.mochiko.mood = 'loan'; }
     this.bark('loan', pid);
     this.emit('borrow', { def, amount, fee });
+    this.checkAchievements();
     this.save();
     return { ok: true, got, fee };
   }
