@@ -76,7 +76,7 @@ function voice(t0, dur, freq, opt) {
   let ph1 = 0, ph2 = 0;
   const an = Math.max(1, atk * SR), rn = Math.max(1, rel * SR);
   // 一阶滤波器状态
-  let lpY = 0, hpY = 0, hpPrev = 0;
+  let lpY = 0, lpY2 = 0, hpY = 0, hpPrev = 0;
   const lpA = lp ? 1 - Math.exp(-2 * Math.PI * lp / SR) : 1;
   const hpA = hpCut ? Math.exp(-2 * Math.PI * hpCut / SR) : 0;
 
@@ -96,8 +96,8 @@ function voice(t0, dur, freq, opt) {
     ph2 += (f * (1 + detune)) / SR;
     let v = osc(type, ph1);
     if (detune) v = (v + osc(type, ph2)) * 0.55;
-    // 低通
-    if (lp) { lpY += lpA * (v - lpY); v = lpY; }
+    // 二阶低通（两级串联，滚降 -12dB/oct）
+    if (lp) { lpY += lpA * (v - lpY); lpY2 += lpA * (lpY - lpY2); v = lpY2; }
     // 高通（一阶差分）
     if (hpCut) { hpY = hpA * (hpY + v - hpPrev); hpPrev = v; v = hpY; }
     const out = v * env * gain;
@@ -112,17 +112,21 @@ function noise(t0, dur, gain, opt) {
   const start = Math.floor(t0 * SR);
   const len = Math.floor(dur * SR);
   const hp = opt.hp === undefined ? 0.3 : opt.hp;
+  const lpCut = opt.lp || 0;                 // 低通截止，砍高频嘶声
   const decay = opt.decay === undefined ? 30 : opt.decay;
   const pan = opt.pan || 0;
   const gl = Math.cos((pan + 1) * Math.PI / 4);
   const gr = Math.sin((pan + 1) * Math.PI / 4);
-  let prev = 0;
+  let prev = 0, lpY = 0;
+  const lpA = lpCut ? 1 - Math.exp(-2 * Math.PI * lpCut / SR) : 1;
   for (let i = 0; i < len; i++) {
     const idx = start + i;
     if (idx >= N) break;
     const env = Math.exp(-decay * i / len);
     const n = Math.random() * 2 - 1;
-    const out = (n - prev * hp) * env * gain;
+    let out = n - prev * hp;
+    if (lpCut) { lpY += lpA * (out - lpY); out = lpY; }
+    out *= env * gain;
     prev = n;
     bufL[idx] += out * gl;
     bufR[idx] += out * gr;
@@ -134,11 +138,12 @@ function kick(t, gain) {
   // 频率从 130Hz 扫到 42Hz
   voice(t, 0.22, 130, { type: 'sin', gain: gain, a: 0.001, r: 0.02, decay: 16, slide: -0.68 });
   // 点击感
-  noise(t, 0.02, gain * 0.35, { hp: 0.85, decay: 40 });
+  noise(t, 0.02, gain * 0.22, { hp: 0.4, lp: 1800, decay: 40 });
 }
 function snare(t, gain) {
-  noise(t, 0.14, gain * 0.7, { hp: 0.55, decay: 18 });
-  voice(t, 0.10, 190, { type: 'tri', gain: gain * 0.28, a: 0.001, r: 0.02, decay: 26 });
+  // 高通减弱 + 低通 2.5kHz：能量集中在 1.5–2.5kHz，闷而有力，不刺
+  noise(t, 0.15, gain * 0.60, { hp: 0.18, lp: 2500, decay: 16 });
+  voice(t, 0.12, 178, { type: 'tri', gain: gain * 0.34, a: 0.001, r: 0.02, decay: 22, lp: 800 });
 }
 function hihat(t, gain, open) {
   noise(t, open ? 0.14 : 0.035, gain * 0.30, { hp: 0.9, decay: open ? 12 : 45 });
@@ -195,7 +200,7 @@ console.log('→ 和弦铺底（Pad，低通 1400Hz）');
     ch.notes.forEach((n, k) => {
       voice(t, BAR * 1.02, midi(n), {
         type: 'saw', gain: g * 0.24, a: 0.45, r: 0.7, detune: 0.005,
-        pan: (k - 1) * 0.5, lp: 1400,
+        pan: (k - 1) * 0.5, lp: 900,
       });
     });
   }
@@ -210,7 +215,7 @@ console.log('→ 贝斯（四分音符，低通 260Hz）');
     const bi = Math.round(t / BEAT) % 4;
     const g = (0.20 + ins(t) * 0.16) * (bi === 0 ? 1 : 0.68);
     voice(t, BEAT * 0.72, midi(ch.root), {
-      type: 'saw', gain: g * 0.52, a: 0.005, r: 0.07, decay: 5.5, lp: 260,
+      type: 'saw', gain: g * 0.58, a: 0.005, r: 0.07, decay: 5.5, lp: 190,
     });
   }
 }
@@ -228,35 +233,37 @@ console.log('→ 鼓组（只保留 kick / snare）');
   // drop 开头不再用镲（噪声镲太"嚓"，改用 kick 重音带过）
 }
 
-console.log('→ 主旋律 Lead（高通 700Hz，与贝斯错开频段）');
-{
-  [40, 57].forEach((base, ri) => {
-    for (let rep = 0; rep < 4; rep++) {
-      const off = base + rep * (BAR * 4);
-      if (off >= 92) break;
-      LEAD.forEach(([b, n, d]) => {
-        const t = off + b * (BEAT / 2);
-        if (t >= DUR) return;
-        voice(t, d * BEAT * 0.70, midi(n), {
-          type: 'sqr', gain: 0.070, a: 0.005, r: 0.13, decay: 2.6,
-          hp: 700, lp: 3800, pan: -0.15,
-        });
-      });
-    }
-  });
-  for (let rep = 0; rep < 4; rep++) {
-    const off = 92 + rep * (BAR * 4);
-    if (off >= 108) break;
-    LEAD_HI.forEach(([b, n, d]) => {
-      const t = off + b * (BEAT / 2);
-      if (t >= DUR) return;
-      voice(t, d * BEAT * 0.70, midi(n), {
-        type: 'sqr', gain: 0.060, a: 0.005, r: 0.13, decay: 2.2,
-        hp: 800, lp: 4500, pan: -0.10,
-      });
-    });
-  }
-}
+console.log('→ 主旋律 Lead（已停用：用户反馈 40s 后出现的旋律违和）');
+// 如需恢复，把下面注释解开
+// console.log('→ 主旋律 Lead（高通 700Hz，与贝斯错开频段）');
+// {
+//   [40, 57].forEach((base, ri) => {
+//     for (let rep = 0; rep < 4; rep++) {
+//       const off = base + rep * (BAR * 4);
+//       if (off >= 92) break;
+//       LEAD.forEach(([b, n, d]) => {
+//         const t = off + b * (BEAT / 2);
+//         if (t >= DUR) return;
+//         voice(t, d * BEAT * 0.70, midi(n), {
+//           type: 'tri', gain: 0.085, a: 0.006, r: 0.14, decay: 2.4,
+//           hp: 600, lp: 2400, pan: -0.15,
+//         });
+//       });
+//     }
+//   });
+//   for (let rep = 0; rep < 4; rep++) {
+//     const off = 92 + rep * (BAR * 4);
+//     if (off >= 108) break;
+//     LEAD_HI.forEach(([b, n, d]) => {
+//       const t = off + b * (BEAT / 2);
+//       if (t >= DUR) return;
+//       voice(t, d * BEAT * 0.70, midi(n), {
+//         type: 'tri', gain: 0.075, a: 0.006, r: 0.14, decay: 2.0,
+//         hp: 700, lp: 2600, pan: -0.10,
+//       });
+//     });
+//   }
+// }
 
 console.log('→ 场景音效（只留必要提示）');
 {
@@ -270,7 +277,7 @@ console.log('→ 场景音效（只留必要提示）');
     voice(t, 0.55, midi(26 - i * 2), {
       type: 'sin', gain: 0.32, a: 0.001, r: 0.08, decay: 8, slide: -0.3, lp: 180,
     });
-    noise(t, 0.26, 0.075, { hp: 0.40, decay: 22 });
+    noise(t, 0.26, 0.065, { hp: 0.15, lp: 1600, decay: 20 });
     // 不再叠加高频提示音
   });
   // （已移除 AI 提示音：窄方波高频听着像"哔"，与画面氛围违和）
