@@ -43,7 +43,7 @@
     ui.renderAll();
 
     // 调试句柄（只读用途；不给任何外部通讯能力）
-    window.__FXK__ = { core, ui, Tutorials, Chapters, AIUI, AIPlayer, LLM, version: '1.4.0' };
+    window.__FXK__ = { core, ui, Tutorials, Chapters, AIUI, AIPlayer, LLM, Theme, version: '1.4.0' };
 
     // 序章
     if (had.ok && (core.st.stats.daysPlayed > 0 || core.st.stats.level > 1)) {
@@ -161,3 +161,21 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', main);
   else main();
 })();
+
+  // Service Worker 检测到新版本 → 提示刷新
+  try {
+    document.addEventListener('sw-updated', () => {
+      const bar = document.createElement('div');
+      bar.style.cssText = 'position:fixed;left:12px;right:12px;bottom:76px;z-index:9998;' +
+        'padding:11px 14px;border-radius:12px;background:rgba(61,220,151,.95);color:#04120c;' +
+        'font:600 12.5px/1.5 -apple-system,system-ui,sans-serif;display:flex;align-items:center;gap:10px;' +
+        'box-shadow:0 6px 24px rgba(0,0,0,.45)';
+      bar.innerHTML = '<span style="flex:1">有新版本可用</span>' +
+        '<button style="border:0;border-radius:8px;padding:6px 12px;background:#04120c;color:#3ddc97;' +
+        'font:700 12px inherit">立即刷新</button>';
+      bar.querySelector('button').onclick = () => location.reload(true);
+      document.body.appendChild(bar);
+      setTimeout(() => { try { bar.remove(); } catch (e) {} }, 20000);
+    });
+  } catch (e) {}
+

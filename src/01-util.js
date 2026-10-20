@@ -206,6 +206,46 @@ const Sfx = (() => {
   };
 })();
 
+/* ---------------- 涨跌配色 ---------------- */
+/**
+ * 国际市场惯例：绿涨红跌
+ * 东亚（日/中/台）股市惯例：红涨绿跌
+ * 用 data-scheme 属性驱动 CSS 变量，JS 侧同步读取。
+ */
+const Theme = (() => {
+  const KEY = 'fxkurumi.scheme';
+  const WEST = { up: '#3ddc97', down: '#ff4d6d', name: '绿涨红跌（国际 FX）' };
+  const EAST = { up: '#ff4d6d', down: '#3ddc97', name: '红涨绿跌（东亚股市）' };
+  // 默认用东亚惯例（红涨绿跌）——《FX战士久留美》是日本作品，
+  // 且中文玩家更习惯这套；设置里可切回国际 FX 的绿涨红跌。
+  let cur = 'east';
+  try { cur = localStorage.getItem(KEY) || 'east'; } catch (e) { cur = 'east'; }
+
+  function apply() {
+    try {
+      document.documentElement.setAttribute('data-scheme', cur === 'east' ? 'east' : 'west');
+    } catch (e) {}
+  }
+  apply();
+
+  return {
+    get current() { return cur; },
+    up() { return cur === 'east' ? EAST.up : WEST.up; },
+    down() { return cur === 'east' ? EAST.down : WEST.down; },
+    /** 根据数值取色 */
+    of(v) { return v >= 0 ? this.up() : this.down(); },
+    set(id) {
+      cur = id === 'east' ? 'east' : 'west';
+      try { localStorage.setItem(KEY, cur); } catch (e) {}
+      apply();
+      return cur;
+    },
+    toggle() { return this.set(cur === 'east' ? 'west' : 'east'); },
+    options() { return [['west', WEST.name], ['east', EAST.name]]; },
+    label() { return cur === 'east' ? EAST.name : WEST.name; },
+  };
+})();
+
 /* ---------------- 本地存储（多槽 + 自动备份 + 元信息） ---------------- */
 const Store = (() => {
   'use strict';

@@ -40,7 +40,8 @@ class CandleChart {
   constructor(canvas, opts) {
     this.s = new Surface(canvas);
     this.o = Object.assign({
-      up: '#3ddc97', down: '#ff4d6d',
+      up: (typeof Theme !== 'undefined' ? Theme.up() : '#3ddc97'),
+      down: (typeof Theme !== 'undefined' ? Theme.down() : '#ff4d6d'),
       grid: 'rgba(255,255,255,0.055)',
       text: 'rgba(226,232,240,0.62)',
       textStrong: '#e2e8f0',

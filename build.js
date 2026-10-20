@@ -131,10 +131,16 @@ const MANIFEST = {
 };
 
 const SW_JS = `/* FX战士久留美 · Service Worker
- * 策略：缓存优先 + 后台更新。游戏是单文件，缓存一次后完全离线可用。
+ * 策略：
+ *   · 页面导航（HTML）→ 网络优先：保证每次打开都拿到最新版本
+ *   · 静态资源（图标等）→ 缓存优先：省流量，离线可用
  * 注意：Service Worker 只在 https 或 localhost 下生效（file:// 不生效）。
+ *
+ * VERSION 由构建脚本按内容自动生成，内容一变版本号就变，
+ * 浏览器就会装新的 SW 并清掉旧缓存——之前写死 'fxkurumi-v3' 导致
+ * 发布新版本后用户一直看到旧界面。
  */
-const VERSION = 'fxkurumi-v3';
+const VERSION = '__SW_VERSION__';
 const ASSETS = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (e) => {
@@ -153,21 +159,43 @@ self.addEventListener('activate', (e) => {
   );
 });
 
+self.addEventListener('message', (e) => {
+  if (e.data === 'skipWaiting') self.skipWaiting();
+});
+
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
   // 不缓存跨域请求（AI 接口等），交给网络
   if (new URL(req.url).origin !== self.location.origin) return;
+
+  // 打开页面：网络优先，拿不到才用缓存（离线时仍可玩）
+  if (req.mode === 'navigate' || req.destination === 'document') {
+    e.respondWith(
+      fetch(req, { cache: 'no-store' })
+        .then((resp) => {
+          if (resp && resp.status === 200 && resp.type === 'basic') {
+            const copy = resp.clone();
+            caches.open(VERSION).then((c) => c.put('./index.html', copy)).catch(() => {});
+          }
+          return resp;
+        })
+        .catch(() => caches.match('./index.html').then((hit) => hit || caches.match('./')))
+    );
+    return;
+  }
+
+  // 其他静态资源：缓存优先
   e.respondWith(
     caches.match(req).then((hit) => {
-      const net = fetch(req).then((resp) => {
+      if (hit) return hit;
+      return fetch(req).then((resp) => {
         if (resp && resp.status === 200 && resp.type === 'basic') {
           const copy = resp.clone();
           caches.open(VERSION).then((c) => c.put(req, copy)).catch(() => {});
         }
         return resp;
-      }).catch(() => hit || caches.match('./index.html'));
-      return hit || net;
+      }).catch(() => caches.match('./index.html'));
     })
   );
 });
@@ -189,7 +217,21 @@ function makePwaHtml(base) {
 // 注册 Service Worker（仅 https / localhost 生效；file:// 会静默跳过）
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
   window.addEventListener('load', function () {
-    navigator.serviceWorker.register('sw.js').catch(function () {});
+    if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(function (reg) {
+      // 每小时检查一次更新；发现新版就提示刷新
+      setInterval(function () { reg.update().catch(function () {}); }, 3600000);
+      reg.addEventListener('updatefound', function () {
+        var sw = reg.installing;
+        if (!sw) return;
+        sw.addEventListener('statechange', function () {
+          if (sw.state === 'installed' && navigator.serviceWorker.controller) {
+            try { document.dispatchEvent(new Event('sw-updated')); } catch (e) {}
+          }
+        });
+      });
+    }).catch(function () {});
+  }
   });
 }
 </script>
@@ -211,7 +253,13 @@ fs.writeFileSync(distFile, html, 'utf8');
 // 4b. PWA 版
 fs.writeFileSync(path.join(docsDir, 'index.html'), makePwaHtml(html), 'utf8');
 fs.writeFileSync(path.join(docsDir, 'manifest.webmanifest'), JSON.stringify(MANIFEST, null, 2), 'utf8');
-fs.writeFileSync(path.join(docsDir, 'sw.js'), SW_JS, 'utf8');
+// Service Worker 版本号按 PWA 页内容自动生成：
+// 内容一变 VERSION 就变，浏览器才会装新 SW 并清掉旧缓存
+const pwaHtml = makePwaHtml(html);
+const pwaHash = require('crypto').createHash('sha1').update(pwaHtml).digest('hex').slice(0, 10);
+const swOut = SW_JS.replace('__SW_VERSION__', `fxkurumi-${pwaHash}`);
+fs.writeFileSync(path.join(docsDir, 'index.html'), pwaHtml, 'utf8');
+fs.writeFileSync(path.join(docsDir, 'sw.js'), swOut, 'utf8');
 fs.writeFileSync(path.join(docsDir, 'icon-192.png'), makeIcon(192));
 fs.writeFileSync(path.join(docsDir, 'icon-512.png'), makeIcon(512));
 fs.writeFileSync(path.join(docsDir, '.nojekyll'), '', 'utf8');

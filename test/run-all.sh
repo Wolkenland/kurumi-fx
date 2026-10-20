@@ -28,6 +28,7 @@ if [ -d /tmp/domtest/node_modules/jsdom ]; then
   NODE_PATH=/tmp/domtest/node_modules node test/chart-scale.js
   NODE_PATH=/tmp/domtest/node_modules node test/v14-ui.js
   NODE_PATH=/tmp/domtest/node_modules node test/closed-list-ui.js
+  NODE_PATH=/tmp/domtest/node_modules node test/theme-check.js
 else
   echo "（跳过 DOM 冒烟测试：未安装 jsdom。安装：cd /tmp/domtest && npm i jsdom）"
 fi

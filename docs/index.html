@@ -24,8 +24,11 @@
   --tx:#e8eefc;
   --tx2:rgba(232,238,252,.62);
   --tx3:rgba(232,238,252,.38);
+  /* 默认：国际 FX 惯例（绿涨红跌） */
   --up:#3ddc97;
   --dn:#ff4d6d;
+  --up-rgb:61,220,151;
+  --dn-rgb:255,77,109;
   --gold:#ffd166;
   --pink:#ff8fb1;
   --purple:#c084fc;
@@ -382,6 +385,14 @@ input[type=range]:active::-webkit-slider-thumb{box-shadow:0 0 0 8px rgba(255,143
 .result{text-align:center;padding:6px 0 4px}
 .result .big{font-size:34px;font-weight:900;letter-spacing:-.02em}
 .result .lbl{font-size:11.5px;color:var(--tx3);letter-spacing:.14em;margin-top:2px}
+
+/* ==== 东亚配色：红涨绿跌（日/中/台股市惯例）==== */
+:root[data-scheme="east"]{
+  --up:#ff4d6d;
+  --dn:#3ddc97;
+  --up-rgb:255,77,109;
+  --dn-rgb:61,220,151;
+}
 </style>
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -652,6 +663,46 @@ const Sfx = (() => {
   };
 })();
 
+/* ---------------- 涨跌配色 ---------------- */
+/**
+ * 国际市场惯例：绿涨红跌
+ * 东亚（日/中/台）股市惯例：红涨绿跌
+ * 用 data-scheme 属性驱动 CSS 变量，JS 侧同步读取。
+ */
+const Theme = (() => {
+  const KEY = 'fxkurumi.scheme';
+  const WEST = { up: '#3ddc97', down: '#ff4d6d', name: '绿涨红跌（国际 FX）' };
+  const EAST = { up: '#ff4d6d', down: '#3ddc97', name: '红涨绿跌（东亚股市）' };
+  // 默认用东亚惯例（红涨绿跌）——《FX战士久留美》是日本作品，
+  // 且中文玩家更习惯这套；设置里可切回国际 FX 的绿涨红跌。
+  let cur = 'east';
+  try { cur = localStorage.getItem(KEY) || 'east'; } catch (e) { cur = 'east'; }
+
+  function apply() {
+    try {
+      document.documentElement.setAttribute('data-scheme', cur === 'east' ? 'east' : 'west');
+    } catch (e) {}
+  }
+  apply();
+
+  return {
+    get current() { return cur; },
+    up() { return cur === 'east' ? EAST.up : WEST.up; },
+    down() { return cur === 'east' ? EAST.down : WEST.down; },
+    /** 根据数值取色 */
+    of(v) { return v >= 0 ? this.up() : this.down(); },
+    set(id) {
+      cur = id === 'east' ? 'east' : 'west';
+      try { localStorage.setItem(KEY, cur); } catch (e) {}
+      apply();
+      return cur;
+    },
+    toggle() { return this.set(cur === 'east' ? 'west' : 'east'); },
+    options() { return [['west', WEST.name], ['east', EAST.name]]; },
+    label() { return cur === 'east' ? EAST.name : WEST.name; },
+  };
+})();
+
 /* ---------------- 本地存储（多槽 + 自动备份 + 元信息） ---------------- */
 const Store = (() => {
   'use strict';
@@ -862,7 +913,8 @@ class CandleChart {
   constructor(canvas, opts) {
     this.s = new Surface(canvas);
     this.o = Object.assign({
-      up: '#3ddc97', down: '#ff4d6d',
+      up: (typeof Theme !== 'undefined' ? Theme.up() : '#3ddc97'),
+      down: (typeof Theme !== 'undefined' ? Theme.down() : '#ff4d6d'),
       grid: 'rgba(255,255,255,0.055)',
       text: 'rgba(226,232,240,0.62)',
       textStrong: '#e2e8f0',
@@ -3555,11 +3607,11 @@ const UI = {
     this.toast(`${s.def.short} ${dir > 0 ? '做多' : '做空'} ${U.fmt(u)}通貨 ×${this.leverage}`, dir > 0 ? 'up' : 'dn');
     const btn = $$(dir > 0 ? '#btnBuy' : '#btnSell');
     const r0 = btn.getBoundingClientRect();
-    buzzFloat((dir > 0 ? '+' : '') + U.fmt(u) + '通貨', dir > 0 ? '#3ddc97' : '#ff4d6d',
+    buzzFloat((dir > 0 ? '+' : '') + U.fmt(u) + '通貨', Theme.of(dir),
       r0.left + r0.width / 2, r0.top - 6);
     if ($$('#tabs button[data-s="pos"]')) this.badge('pos', c.st.positions.length);
     this.renderAll();
-    FX.pulse(dir > 0 ? '#3ddc97' : '#ff4d6d');
+    FX.pulse(Theme.of(dir));
     Chapters.check();
   },
 
@@ -3969,7 +4021,7 @@ const UI = {
         const r = c.close(p.id, p.units);
         if (r.ok) {
           this.toast(`${s.def.short} 平仓 ${U.sfmt(r.pnl)} 円`, r.pnl >= 0 ? 'up' : 'dn');
-          buzzFloat(U.sfmt(r.pnl), r.pnl >= 0 ? '#3ddc97' : '#ff4d6d', window.innerWidth - 70, 190);
+          buzzFloat(U.sfmt(r.pnl), Theme.of(r.pnl), window.innerWidth - 70, 190);
         }
         this.renderPositions();
       });
@@ -4325,6 +4377,7 @@ const UI = {
       <div class="kv" data-act="hap"><span class="k">震动反馈</span><span class="v">${s.haptics ? '开' : '关'}</span></div>
       <div class="kv" data-act="fx"><span class="k">特效与动画</span><span class="v">${s.effects ? '开' : '关'}</span></div>
       <div class="kv" data-act="ma"><span class="k">K线均线</span><span class="v">${s.ma ? '开' : '关'}</span></div>
+      <div class="kv" data-act="scheme"><span class="k">涨跌配色</span><span class="v" style="font-size:11px">${Theme.label()}</span></div>
       <div class="kv" data-act="slots"><span class="k">📁 存档管理（3 个槽位）</span><span class="v" id="slotState">→</span></div>
       <div class="kv" data-act="save"><span class="k">立即存档到当前槽</span><span class="v">→</span></div>
       <div class="kv" data-act="tut"><span class="k">重看教学</span><span class="v">→</span></div>
@@ -4337,6 +4390,15 @@ const UI = {
         else if (a === 'hap') { s.haptics = !s.haptics; Haptics.tap(); }
         else if (a === 'fx') { s.effects = !s.effects; this.effects = s.effects; }
         else if (a === 'ma') { s.ma = !s.ma; this.chart.o.showMA = s.ma; }
+        else if (a === 'scheme') {
+          Theme.toggle();
+          // 图表颜色是构造时快照的，切完要同步
+          if (this.chart && this.chart.o) {
+            this.chart.o.up = Theme.up();
+            this.chart.o.down = Theme.down();
+          }
+          this.toast('涨跌配色：' + Theme.label(), 'up');
+        }
         else if (a === 'save') { c.save(); this.toast('已存档', 'up'); }
         else if (a === 'slots') { Sheets.slots(c); return; }
         else if (a === 'aiconfig') { AIUI.openConfig(); return; }
@@ -6594,7 +6656,7 @@ const AIUI = (() => {
     ui.renderAll();
 
     // 调试句柄（只读用途；不给任何外部通讯能力）
-    window.__FXK__ = { core, ui, Tutorials, Chapters, AIUI, AIPlayer, LLM, version: '1.4.0' };
+    window.__FXK__ = { core, ui, Tutorials, Chapters, AIUI, AIPlayer, LLM, Theme, version: '1.4.0' };
 
     // 序章
     if (had.ok && (core.st.stats.daysPlayed > 0 || core.st.stats.level > 1)) {
@@ -6712,13 +6774,45 @@ const AIUI = (() => {
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', main);
   else main();
 })();
+
+  // Service Worker 检测到新版本 → 提示刷新
+  try {
+    document.addEventListener('sw-updated', () => {
+      const bar = document.createElement('div');
+      bar.style.cssText = 'position:fixed;left:12px;right:12px;bottom:76px;z-index:9998;' +
+        'padding:11px 14px;border-radius:12px;background:rgba(61,220,151,.95);color:#04120c;' +
+        'font:600 12.5px/1.5 -apple-system,system-ui,sans-serif;display:flex;align-items:center;gap:10px;' +
+        'box-shadow:0 6px 24px rgba(0,0,0,.45)';
+      bar.innerHTML = '<span style="flex:1">有新版本可用</span>' +
+        '<button style="border:0;border-radius:8px;padding:6px 12px;background:#04120c;color:#3ddc97;' +
+        'font:700 12px inherit">立即刷新</button>';
+      bar.querySelector('button').onclick = () => location.reload(true);
+      document.body.appendChild(bar);
+      setTimeout(() => { try { bar.remove(); } catch (e) {} }, 20000);
+    });
+  } catch (e) {}
+
 </script>
 
 <script>
 // 注册 Service Worker（仅 https / localhost 生效；file:// 会静默跳过）
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
   window.addEventListener('load', function () {
-    navigator.serviceWorker.register('sw.js').catch(function () {});
+    if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(function (reg) {
+      // 每小时检查一次更新；发现新版就提示刷新
+      setInterval(function () { reg.update().catch(function () {}); }, 3600000);
+      reg.addEventListener('updatefound', function () {
+        var sw = reg.installing;
+        if (!sw) return;
+        sw.addEventListener('statechange', function () {
+          if (sw.state === 'installed' && navigator.serviceWorker.controller) {
+            try { document.dispatchEvent(new Event('sw-updated')); } catch (e) {}
+          }
+        });
+      });
+    }).catch(function () {});
+  }
   });
 }
 </script>

@@ -398,11 +398,11 @@ const UI = {
     this.toast(`${s.def.short} ${dir > 0 ? '做多' : '做空'} ${U.fmt(u)}通貨 ×${this.leverage}`, dir > 0 ? 'up' : 'dn');
     const btn = $$(dir > 0 ? '#btnBuy' : '#btnSell');
     const r0 = btn.getBoundingClientRect();
-    buzzFloat((dir > 0 ? '+' : '') + U.fmt(u) + '通貨', dir > 0 ? '#3ddc97' : '#ff4d6d',
+    buzzFloat((dir > 0 ? '+' : '') + U.fmt(u) + '通貨', Theme.of(dir),
       r0.left + r0.width / 2, r0.top - 6);
     if ($$('#tabs button[data-s="pos"]')) this.badge('pos', c.st.positions.length);
     this.renderAll();
-    FX.pulse(dir > 0 ? '#3ddc97' : '#ff4d6d');
+    FX.pulse(Theme.of(dir));
     Chapters.check();
   },
 
@@ -812,7 +812,7 @@ const UI = {
         const r = c.close(p.id, p.units);
         if (r.ok) {
           this.toast(`${s.def.short} 平仓 ${U.sfmt(r.pnl)} 円`, r.pnl >= 0 ? 'up' : 'dn');
-          buzzFloat(U.sfmt(r.pnl), r.pnl >= 0 ? '#3ddc97' : '#ff4d6d', window.innerWidth - 70, 190);
+          buzzFloat(U.sfmt(r.pnl), Theme.of(r.pnl), window.innerWidth - 70, 190);
         }
         this.renderPositions();
       });
@@ -1168,6 +1168,7 @@ const UI = {
       <div class="kv" data-act="hap"><span class="k">震动反馈</span><span class="v">${s.haptics ? '开' : '关'}</span></div>
       <div class="kv" data-act="fx"><span class="k">特效与动画</span><span class="v">${s.effects ? '开' : '关'}</span></div>
       <div class="kv" data-act="ma"><span class="k">K线均线</span><span class="v">${s.ma ? '开' : '关'}</span></div>
+      <div class="kv" data-act="scheme"><span class="k">涨跌配色</span><span class="v" style="font-size:11px">${Theme.label()}</span></div>
       <div class="kv" data-act="slots"><span class="k">📁 存档管理（3 个槽位）</span><span class="v" id="slotState">→</span></div>
       <div class="kv" data-act="save"><span class="k">立即存档到当前槽</span><span class="v">→</span></div>
       <div class="kv" data-act="tut"><span class="k">重看教学</span><span class="v">→</span></div>
@@ -1180,6 +1181,15 @@ const UI = {
         else if (a === 'hap') { s.haptics = !s.haptics; Haptics.tap(); }
         else if (a === 'fx') { s.effects = !s.effects; this.effects = s.effects; }
         else if (a === 'ma') { s.ma = !s.ma; this.chart.o.showMA = s.ma; }
+        else if (a === 'scheme') {
+          Theme.toggle();
+          // 图表颜色是构造时快照的，切完要同步
+          if (this.chart && this.chart.o) {
+            this.chart.o.up = Theme.up();
+            this.chart.o.down = Theme.down();
+          }
+          this.toast('涨跌配色：' + Theme.label(), 'up');
+        }
         else if (a === 'save') { c.save(); this.toast('已存档', 'up'); }
         else if (a === 'slots') { Sheets.slots(c); return; }
         else if (a === 'aiconfig') { AIUI.openConfig(); return; }
