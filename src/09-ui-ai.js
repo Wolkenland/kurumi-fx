@@ -525,6 +525,15 @@ const AIUI = (() => {
         <label>单次回复上限 token（越小越省钱）</label>
         <input type="number" id="cfgTok" value="${d.maxTok}" style="height:42px;font-size:15px">
       </div>
+      <div class="field">
+        <label>思考频率（按真实时间计，不受游戏倍速影响）</label>
+        <div class="amt-chips" id="thinkChips">
+          ${THINK_PRESETS.map(t => `<button data-th="${t.id}" class="${t.id === AIPlayer.api.thinkId ? 'on' : ''}">${t.name}</button>`).join('')}
+        </div>
+        <div style="font-size:10.5px;color:var(--tx3);margin-top:5px" id="thinkHint">
+          ${(THINK_PRESETS.find(x => x.id === AIPlayer.api.thinkId) || THINK_PRESETS[1]).hint}
+        </div>
+      </div>
 
       <div style="padding:9px 11px;border-radius:11px;background:rgba(255,77,109,.09);
         border:1px solid rgba(255,77,109,.28);font-size:11px;line-height:1.7;color:#ffd9e2;margin-bottom:12px">
@@ -549,6 +558,20 @@ const AIUI = (() => {
       n.innerHTML = t;
       n.style.color = kind === 'ok' ? 'var(--up)' : kind === 'err' ? 'var(--dn)' : 'var(--tx3)';
     };
+
+    // 思考频率
+    if (typeof THINK_PRESETS !== 'undefined') {
+      $$$('#thinkChips button', sh).forEach(b => {
+        b.addEventListener('click', () => {
+          $$$('#thinkChips button', sh).forEach(x => x.classList.toggle('on', x === b));
+          AIPlayer.api.setThink(b.dataset.th);
+          const hint = $$('#thinkHint', sh);
+          const p = THINK_PRESETS.find(x => x.id === b.dataset.th);
+          if (hint && p) hint.textContent = p.hint;
+          Sfx.click();
+        });
+      });
+    }
 
     $$$('#pvChips button', sh).forEach(b => {
       bindTap(b, () => {

@@ -11,6 +11,16 @@
  * ============================================================ */
 
 /* ---------------- 配置 ---------------- */
+/** AI 思考频率档位（按真实时间计，不受游戏倍速影响） */
+const THINK_PRESETS = [
+  { id: 'fast',   name: '快',   ms: 30000,  hint: '30 秒一次，API 消耗大' },
+  { id: 'normal', name: '标准', ms: 60000,  hint: '60 秒一次，推荐' },
+  { id: 'slow',   name: '慢',   ms: 120000, hint: '2 分钟一次，省 token' },
+  { id: 'manual', name: '手动', ms: 0,      hint: '只有你点按钮时才思考' },
+];
+const THINK_DEFAULT = 'normal';
+const thinkMsOf = (id) => (THINK_PRESETS.find(x => x.id === id) || THINK_PRESETS[1]).ms;
+
 const AI_PRESETS = {
   deepseek: { name: 'DeepSeek', url: 'https://api.deepseek.com/v1/chat/completions', model: 'deepseek-chat' },
   openai:   { name: 'OpenAI',   url: 'https://api.openai.com/v1/chat/completions',   model: 'gpt-4o-mini' },
@@ -254,7 +264,7 @@ class Agent {
     this.errors = 0;
     this.busy = false;
     this.nextActMs = 15000 + Math.random() * 20000; // 距离下次行动
-    this.thinkInterval = 18000;                    // 思考间隔（约 18 秒一次决策，让她跟得上节奏）
+    this.thinkInterval = 60000;                    // 默认 60 秒（实际值由 AIStore.thinkMs 覆盖）
   }
 
   get equity() { return this.core.equity(); }
@@ -613,10 +623,10 @@ const AIContest = (() => {
     c.history.push({ round: c.round, rows: s.rows.map(r => ({ id: r.id, ret: +r.ret.toFixed(2) })),
                      me: me.rank, day: core.st.date.day });
 
-    // 开新周期
+    // 开新周期（保留上一期结果，否则界面看不到「谁赢了」）
     const nc = newCycle(core, state);
     nc.history = c.history;
-    nc.lastResult = null;
+    nc.lastResult = out;
     state.contest = nc;
     return out;
   }
@@ -632,7 +642,7 @@ const AIPlayer = (() => {
   let core = null, ui = null;
   let state = {
     agent: null, contest: null, mebuki: null,
-    thinkTimer: 0, chat: [], chatBusy: false,
+    thinkTimer: 0, thinkMs: thinkMsOf(THINK_DEFAULT), chat: [], chatBusy: false,
     enabled: false,
     lastError: '', lastCallMs: 0, callCount: 0,
   };
@@ -658,6 +668,7 @@ const AIPlayer = (() => {
       if (saved.agent.lastQuote) state.agent.lastQuote = saved.agent.lastQuote;
       if (saved.agent.actions) state.agent.actions = saved.agent.actions;
       if (saved.agent.errors) state.agent.errors = saved.agent.errors;
+      if (saved.agent.thinkMs !== undefined) state.thinkMs = saved.agent.thinkMs;
       // 老存档的 aggressive=0.6 是"保守版"遗留值，升级到进攻型
       if (saved.agent.aggressive) {
         state.agent.aggressive = Math.max(0.72, saved.agent.aggressive);
@@ -665,6 +676,8 @@ const AIPlayer = (() => {
     }
     state.mebuki = saved.mebuki || { start: 500000, equity: 500000, seed: (Math.random() * 1e9) | 0 };
     state.contest = c.st.contest;
+    // 没有存档里的竞赛时，先开一期（哪怕还没配 API——至少能和芽吹比）
+    if (!state.contest) state.contest = AIContest.newCycle(c, state);
     state.chat = (saved.chat || []).slice(-40);
     // 挂到 core 上，方便存档与 UI 访问
     c.ai = api;
@@ -678,6 +691,18 @@ const AIPlayer = (() => {
     get chat() { return state.chat; },
     get error() { return state.lastError; },
     get stats() { return { calls: state.callCount, ms: state.lastCallMs }; },
+    get thinkMs() { return state.thinkMs; },
+    get thinkTimer() { return state.thinkTimer; },   // 只读，供调试与测试观察
+    setThink(id) {
+      state.thinkMs = thinkMsOf(id);
+      state.thinkTimer = 0;
+      AIStore.save();
+      return state.thinkMs;
+    },
+    get thinkId() {
+      const p = THINK_PRESETS.find(x => x.ms === state.thinkMs);
+      return p ? p.id : 'normal';
+    },
     get enabled() { return state.enabled; },
     standings: () => AIContest.standings(core, state),
     roster: () => AIContest.roster(core, state.agent),
@@ -707,6 +732,7 @@ const AIPlayer = (() => {
       agent: a ? {
         name: a.name, lastThought: a.lastThought, lastQuote: a.lastQuote,
         actions: a.actions, errors: a.errors, aggressive: a.aggressive,
+        thinkMs: state.thinkMs,
         cash: a.core.st.cash, positions: a.core.st.positions,
         closed: a.core.st.closed.slice(0, 60), stats: a.core.st.stats,
         loans: a.core.st.loans,
@@ -739,21 +765,27 @@ const AIPlayer = (() => {
 
   /** 每个游戏 tick 调用 */
   function onTick(dtMs) {
-    if (!state.enabled) return;
-    // 芽吹按 tick 演进
+    // ============ 第一段：竞赛推进 ============
+    // 这一段不受「AI 是否启用」「是否配了 API」「是否手动模式」影响。
+    // 芽吹是脚本角色，不调 API，所以她必须一直动；否则不配 API 的玩家永远等不到结算。
     if (state.mebuki) AIContest.tickMebuki(state, core.market, 'USDJPY');
-    // AI 决策节拍
-    if (!state.agent || !LLM.ready()) return;
-    state.thinkTimer += dtMs * (core.st.speed || 1);
-    if (state.thinkTimer >= state.agent.thinkInterval) {
-      state.thinkTimer = 0;
-      runOnce();
-    }
-    // 周期结算
     if (state.contest && core.st.date.day >= state.contest.endDay) {
       const r = AIContest.settle(core, state);
       if (r && ui) ui.onContestSettled(r);
       persist();
+    }
+
+    // ============ 第二段：AI 决策节拍 ============
+    // 只有这一段才需要 enabled / agent / API / 非手动模式。
+    if (!state.enabled) return;
+    if (!state.agent || !LLM.ready()) return;
+    // 用真实时间（不乘游戏倍速）。之前乘了 speed，4 倍速时 18 秒实际只过了 4.5 秒。
+    const thinkMs = state.thinkMs === undefined ? thinkMsOf(THINK_DEFAULT) : state.thinkMs;
+    if (thinkMs <= 0) return;              // 手动模式：不自动思考
+    state.thinkTimer += dtMs;
+    if (state.thinkTimer >= thinkMs) {
+      state.thinkTimer = 0;
+      runOnce();
     }
   }
 
