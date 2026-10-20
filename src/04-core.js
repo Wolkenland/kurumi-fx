@@ -123,23 +123,23 @@ const ACHIEVEMENTS = [
  */
 const DAILY_TASKS = [
   { id: 'close3',   when: 'instant', pts: 1, name: '做三笔',
-    desc: '今天平仓 3 次', goal: 3, prog: c => c.st.dailyStat.closed },
+    desc: '本期平仓 3 次', goal: 3, prog: c => c.st.dailyStat.closed },
   { id: 'profit',   when: 'instant', pts: 2, name: '今日为正',
-    desc: '今天的已实现盈亏为正', goal: 1, prog: c => c.st.dailyStat.pnl > 0 ? 1 : 0 },
+    desc: '本期已实现盈亏为正', goal: 1, prog: c => c.st.dailyStat.pnl > 0 ? 1 : 0 },
   { id: 'nail',     when: 'instant', pts: 1, name: '小赚一笔',
     desc: '单笔平仓盈利 ≥ 5000 円', goal: 1, prog: c => c.st.dailyStat.bestWin >= 5000 ? 1 : 0 },
   { id: 'trypair',  when: 'instant', pts: 2, name: '换换口味',
-    desc: '交易一个今天还没碰过的品种', goal: 2, prog: c => c.st.dailyStat.pairsToday },
+    desc: '交易 2 个不同品种', goal: 2, prog: c => c.st.dailyStat.pairsToday },
   { id: 'repay',    when: 'instant', pts: 2, name: '还一点',
-    desc: '今天偿还一部分负债', goal: 1, prog: c => c.st.dailyStat.repaid > 0 ? 1 : 0 },
+    desc: '偿还一部分负债', goal: 1, prog: c => c.st.dailyStat.repaid > 0 ? 1 : 0 },
   { id: 'noborrow', when: 'settle', pts: 2, name: '不借钱',
-    desc: '一整天没有新增借款', goal: 1, prog: c => c.st.dailyStat.borrowed === 0 ? 1 : 0 },
+    desc: '本期没有新增借款', goal: 1, prog: c => c.st.dailyStat.borrowed === 0 ? 1 : 0 },
   { id: 'noliq',    when: 'settle', pts: 1, name: '活着',
-    desc: '一整天没有被强制平仓', goal: 1, prog: c => c.st.dailyStat.liquidated === 0 ? 1 : 0 },
+    desc: '本期没有被强制平仓', goal: 1, prog: c => c.st.dailyStat.liquidated === 0 ? 1 : 0 },
   { id: 'calm',     when: 'settle', pts: 1, name: '保持冷静',
-    desc: '日落时冷静值 ≥ 60', goal: 1, prog: c => c.st.stats.mental >= 60 ? 1 : 0 },
+    desc: '结算时冷静值 ≥ 60', goal: 1, prog: c => c.st.stats.mental >= 60 ? 1 : 0 },
   { id: 'nodeposit',when: 'settle', pts: 2, name: '自力更生',
-    desc: '一整天没有入金', goal: 1, prog: c => c.st.dailyStat.deposited === 0 ? 1 : 0 },
+    desc: '本期没有入金', goal: 1, prog: c => c.st.dailyStat.deposited === 0 ? 1 : 0 },
 ];
 
 /** 全部完成的额外奖励 */
@@ -207,7 +207,10 @@ function initialState() {
              holdCount: 0,         // 时长统计样本数
              perksBought: 0, byPair: {} },  // 买过多少次技能 / 分品种统计
     achievements: [],              // 已解锁的成就 id
-    dailyTasks: [],                // 今日任务（3 个）
+    dailyTasks: [],                // 当前周期的限时任务（3 个）
+    dailyEndAt: 0,                 // 本轮结束的真实时间戳（ms）
+    dailyCycleMs: 15 * 60 * 1000,  // 轮次长度：现实 15 分钟
+    dailyRound: 0,                 // 已完成轮数
     dailyStat: { closed: 0, pnl: 0, liquidated: 0, borrowed: 0, repaid: 0,
                  bestWin: 0, deposited: 0, pairsToday: 0 },
     dailyDoneIds: [],              // 今天已完成的任务 id
@@ -351,8 +354,9 @@ class Core {
 
   /* ===== 每日任务 ===== */
   /** 抽 3 个当日任务（尽量同时包含即时型与结算型） */
-  genDailyTasks(rng) {
-    const r = rng || Math.random;
+  genDailyTasks(rng, nowMs) {
+    const r = typeof rng === 'function' ? rng : Math.random;
+    const base = typeof nowMs === 'number' ? nowMs : Date.now();
     const instant = DAILY_TASKS.filter(t => t.when === 'instant');
     const settle = DAILY_TASKS.filter(t => t.when === 'settle');
     const pick = (arr, n) => {
@@ -367,7 +371,47 @@ class Core {
     this.st.dailyAllDone = false;
     this.st.dailyStat = { closed: 0, pnl: 0, liquidated: 0, borrowed: 0, repaid: 0,
                           bestWin: 0, deposited: 0, pairsToday: 0 };
+    const cycMs = this.st.dailyCycleMs || (15 * 60 * 1000);
+    this.st.dailyEndAt = base + cycMs;
+    // 兼容旧字段（老存档里可能还有）
+    this.st.dailyStartDay = this.st.date.day;
+    this.st.dailyEndDay = 0;
     return chosen;
+  }
+
+  /**
+   * 限时任务是否到期（按现实时间）。
+   * 到期就结算上一轮并开新一轮。可在 tick 里高频调用，开销只有一次比较。
+   * @returns true 表示刚刚刷新了
+   */
+  checkDailyExpiry(now) {
+    if (this.agent) return false;
+    const t = now || Date.now();
+    const st = this.st;
+    if (!Array.isArray(st.dailyTasks) || !st.dailyTasks.length) {
+      this.genDailyTasks();
+      return true;
+    }
+    if (!st.dailyEndAt) {
+      // 老存档迁移：给它一个从现在开始的完整轮次
+      const cyc = st.dailyCycleMs || (15 * 60 * 1000);
+      st.dailyEndAt = t + cyc;
+      return false;
+    }
+    if (t < st.dailyEndAt) return false;
+    // 到点：先结算（结算型任务看整轮累计），再开新一轮
+    this.checkDaily('settle');
+    st.dailyRound = (st.dailyRound || 0) + 1;
+    this.genDailyTasks(null, t);
+    this.emit('dailyRound', { round: st.dailyRound });
+    return true;
+  }
+
+  /** 本轮剩余毫秒 */
+  dailyRemainMs(now) {
+    const t = now || Date.now();
+    const end = this.st.dailyEndAt || 0;
+    return Math.max(0, end - t);
   }
 
   /** 取任务定义 */
@@ -559,6 +603,7 @@ class Core {
       this.newDay();
     }
     this.checkRisk();
+    this.checkDailyExpiry();
     if (this.st.speed > 0) this.emit('tick', res);
   }
 
@@ -566,16 +611,8 @@ class Core {
     const d = this.st.date.day;
     this.st.stats.daysPlayed = d;
 
-    // ---- 每日任务：先结算昨天（结算型任务在这一刻判定）----
-    if (!this.agent) {
-      if (Array.isArray(this.st.dailyTasks) && this.st.dailyTasks.length) {
-        this.checkDaily('settle');
-      }
-      this.st.date.day = d;          // checkDaily 可能没改 day，这里顺手纠正
-      this.genDailyTasks();
-    } else {
-      this.st.dailyTasks = [];
-    }
+    // 限时任务按现实时间轮转，与游戏内「天」无关，这里不处理。
+    // （原来按游戏天刷新，1 倍速下 24 秒就换一轮，玩家来不及完成）
     // 隔夜利息（周三三倍）
     let swap = 0;
     const mult = (d % 7 === 2) ? 3 : (d % 7 === 5 || d % 7 === 6 ? 0 : 1);

@@ -76,13 +76,28 @@ const p2=t.st.insightPts;
 t.checkDaily('instant'); t.checkDaily('settle');
 chk('重复检查不再给点', t.st.insightPts===p2, `${p2} → ${t.st.insightPts}`);
 
-console.log('\n=== 9. 换日刷新 ===');
+console.log('\n=== 9. 限时刷新（现实时间 15 分钟）===');
 t=withTasks(['close3']);
+chk('轮次长度是 15 分钟', t.st.dailyCycleMs === 15*60*1000, (t.st.dailyCycleMs/60000)+' 分钟');
+chk('genDailyTasks 设了结束时间戳', t.st.dailyEndAt > Date.now(), '有效');
 const oldIds=t.st.dailyTasks.slice();
+const endAt = t.st.dailyEndAt;
+// 时间未到：不刷新
+chk('未到期不刷新', t.checkDailyExpiry(t.st.dailyEndAt - 60000) === false);
+chk('未到期任务不变', t.st.dailyTasks.join(',') === oldIds.join(','));
+chk('剩余时间可查', t.dailyRemainMs(t.st.dailyEndAt - 60000) === 60000, String(t.dailyRemainMs(t.st.dailyEndAt - 60000)));
+// 到期：刷新
+chk('到期会刷新', t.checkDailyExpiry(t.st.dailyEndAt + 1000) === true);
+chk('刷新后结束时间推后', t.st.dailyEndAt > endAt, `${endAt} → ${t.st.dailyEndAt}`);
+chk('刷新后完成列表清空', t.st.dailyDoneIds.length===0);
+chk('刷新后仍 3 个任务', t.st.dailyTasks.length===3);
+chk('刷新后统计清零', t.st.dailyStat.closed===0);
+chk('轮次计数 +1', t.st.dailyRound === 1, String(t.st.dailyRound));
+// 游戏内天数变化不影响刷新
+const beforeDay = t.st.dailyTasks.slice();
+t.st.date.day = 99;
 t.newDay();
-chk('newDay 后重置完成列表', t.st.dailyDoneIds.length===0);
-chk('newDay 后仍 3 个任务', t.st.dailyTasks.length===3);
-chk('newDay 后统计清零', t.st.dailyStat.closed===0);
+chk('游戏内天数变化不触发刷新', t.st.dailyTasks.join(',') === beforeDay.join(','), t.st.dailyTasks.join(','));
 
 console.log('\n=== 10. AI 不参与 ===');
 const ai=new Core(); ai.agent=true;

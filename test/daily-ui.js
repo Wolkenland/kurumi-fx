@@ -19,8 +19,9 @@ let pass=0,fail=0; const chk=(m,c,i)=>c?(pass++,console.log('  ✓ '+m)):(fail++
   await sleep(400); click($('.cv-btn')); await sleep(600);
   const K=window.__FXK__, c=K.core;
   click($('#tabs button[data-s="me"]')); await sleep(300);
-  chk('人物页有今日任务卡片', /今日任务/.test(doc.documentElement.innerHTML));
+  chk('人物页有限时任务卡片', /限时任务/.test(doc.documentElement.innerHTML));
   chk('显示任务进度 x/3', /[0-3] \/ 3/.test(doc.documentElement.innerHTML));
+  chk('显示 mm:ss 倒计时', /\d{2}:\d{2}/.test(doc.documentElement.innerHTML));
   chk('任务数量为 3', c.dailyProgress().length===3, c.dailyProgress().length+' 个');
   const before=c.st.insightPts;
   c.st.cash=5000000;

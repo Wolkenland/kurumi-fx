@@ -905,6 +905,13 @@ const UI = {
   },
 
   /* ---------- 人物屏 ---------- */
+  /** 毫秒 → mm:ss */
+  fmtCd(ms) {
+    const s = Math.max(0, Math.ceil(ms / 1000));
+    const m = Math.floor(s / 60);
+    return String(m).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+  },
+
   renderMe() {
     const c = this.core, st = c.st;
     const lv = st.stats.level;
@@ -940,7 +947,9 @@ const UI = {
             border:1px solid ${allDone ? 'rgba(61,220,151,.35)' : 'rgba(255,255,255,.10)'}">
           <div style="display:flex;align-items:baseline;gap:8px">
             <span style="font-size:12.5px;font-weight:800;color:${allDone ? 'var(--up)' : 'var(--tx)'}">
-              📋 今日任务</span>
+              📋 限时任务</span>
+            <span style="font-size:10px;color:var(--blue);margin-left:8px">
+              <b class="mono" id="dailyCountdown">${this.fmtCd(c.dailyRemainMs())}</b> 后刷新</span>
             <span style="font-size:10.5px;color:var(--tx3);margin-left:auto">
               ${doneN} / ${dp.length}${allDone ? '　全清 +' + DAILY_ALL_BONUS : ''}</span>
           </div>
@@ -959,7 +968,7 @@ const UI = {
                 <span style="font-size:10px;color:var(--tx3);margin-left:5px">${x.desc}</span>
               </div>
               ${x.when === 'settle' && !x.done
-                ? '<span class="tag" style="font-size:8.5px;background:rgba(140,180,255,.15);color:var(--blue);border-color:rgba(140,180,255,.3)">日落结算</span>'
+                ? '<span class="tag" style="font-size:8.5px;background:rgba(140,180,255,.15);color:var(--blue);border-color:rgba(140,180,255,.3)">周期结算</span>'
                 : `<span class="mono" style="font-size:10px;color:var(--tx3)">${x.prog}/${x.goal}</span>`}
               <span style="font-size:10.5px;font-weight:700;color:var(--gold);flex:0 0 auto">+${x.pts}</span>
             </div>`).join('')}
@@ -1036,6 +1045,17 @@ const UI = {
         <span>${PAIRS[r.pid].short} ${r.lev}× ${mrk}</span>
         <span class="a mono ${r.pnl >= 0 ? 'tick-up' : 'tick-dn'}">${U.sfmt(r.pnl)}</span></div>`;
     }).join('') : '<div class="empty">还没有平仓记录。</div>';
+
+    // 限时任务倒计时：每秒刷新一次文本
+    if (this._dailyTimer) { clearInterval(this._dailyTimer); this._dailyTimer = null; }
+    const cdEl = $$('#dailyCountdown');
+    if (cdEl) {
+      this._dailyTimer = setInterval(() => {
+        const n = $$('#dailyCountdown');
+        if (!n) { clearInterval(this._dailyTimer); this._dailyTimer = null; return; }
+        n.textContent = this.fmtCd(c.dailyRemainMs());
+      }, 1000);
+    }
 
     // 成就 / 统计入口（每次渲染都要重新绑定，因为 innerHTML 被整体替换）
     const ba = $$('#btnAch');
