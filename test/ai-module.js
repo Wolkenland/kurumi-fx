@@ -361,18 +361,20 @@ console.log('\n=== 11. 挑战目标与里程碑 ===');
   chk('未达成目标不发里程碑奖励', c.st.aiGoals[0].done === false);
   chk('当前进度被记录', typeof c.st.aiGoals[0].current === 'number', String(c.st.aiGoals[0].current));
 
-  // 达成 → 发奖
+  // 达成 → 发奖（v1.4.0 起达成即从列表移除，不再靠 done 标记）
   c.st.aiGoals.push({ id: 2, base: 300000, target: 20, setDay: 0, current: 0, done: false, doneDay: null });
   state.agent.core.st.cash = 400000;                  // +33%
   before = c.st.insightPts;
   const res = AIContest.settle(c, state);
-  chk('达成目标后被标记', c.st.aiGoals[1].done === true);
-  chk('记录了达成日', c.st.aiGoals[1].doneDay !== null);
+  const ids = (c.st.aiGoals || []).map(g => g.id);
+  chk('达成后从列表移除', ids.indexOf(2) < 0, '剩 ' + ids.join(','));
+  chk('两个都达成后列表清空', ids.length === 0, '剩 ' + ids.join(','));
   chk('里程碑奖励 = 2 + floor(target/25)', (() => {
     const expect = AI_REWARDS.milestone.insight + Math.floor(20 / 25);
     return c.st.insightPts >= before + expect;
   })(), 'pts=' + c.st.insightPts);
   chk('里程碑写入存档', !!c.st.milestones['goal_2'], JSON.stringify(c.st.milestones));
+  chk('记录了达成结果', !!c.st.lastGoalResult && c.st.lastGoalResult.ok === true, JSON.stringify(c.st.lastGoalResult));
 }
 
 console.log('\n=== 12. 洞察点与永久技能 ===');

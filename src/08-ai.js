@@ -560,6 +560,45 @@ const AIContest = (() => {
   }
 
   /** 结算周期，发放奖励 */
+  /**
+   * 挑战目标判定：达成即刻清除并给奖励。
+   * 放在 AIContest 上而不是 AIPlayer 里，是因为它属于「奖励/竞赛」体系，
+   * 不该和「AI 决策」耦合（否则没初始化 AIPlayer 就没法判定）。
+   *
+   * @returns 本次达成的目标数组 [{goal, pts, ret}]
+   */
+  function checkGoals(core, state) {
+    const ai = state && state.agent;
+    if (!ai || !core) return [];
+    const list = core.st.aiGoals || [];
+    if (!list.length) return [];
+    const done = [];
+    core.st.milestones = core.st.milestones || {};
+    for (const g of list) {
+      if (g.done) continue;
+      const ret = (ai.equity - g.base) / g.base * 100;
+      g.current = ret;
+      if (ret >= g.target) {
+        g.done = true;
+        g.doneDay = core.st.date.day;
+        const pts = AI_REWARDS.milestone.insight + Math.round(g.target / 25);
+        core.addInsight(pts, 'AI 达成挑战');
+        core.st.milestones['goal_' + g.id] = { day: core.st.date.day, target: g.target };
+        done.push({ goal: g, pts, ret });
+      }
+    }
+    if (done.length) {
+      core.st.aiGoals = list.filter(g => !g.done);
+      core.st.lastGoalResult = {
+        day: core.st.date.day, targets: done.map(d => d.goal.id), ok: true,
+        pts: done.reduce((a, d) => a + d.pts, 0),
+      };
+      core.pushLog('goal', `「${ai.name}」达成挑战目标（+${done.map(d => d.goal.target).join('%, +')}%）`, 0);
+      core.emit('goalDone', { list: done.map(d => ({ target: d.goal.target, pts: d.pts, ret: d.ret })) });
+    }
+    return done;
+  }
+
   function settle(core, state) {
     const s = standings(core, state);
     if (!s) return null;
@@ -600,22 +639,21 @@ const AIContest = (() => {
       }
     }
 
-    // 给领奖进度：AI 挑战目标
-    const goals = (core.st.aiGoals || []).filter(g => !g.done);
-    for (const g of goals) {
-      const ai = state.agent;
-      if (!ai) continue;
-      const ret = (ai.equity - g.base) / g.base * 100;
-      g.current = ret;
-      if (ret >= g.target) {
-        g.done = true;
-        g.doneDay = core.st.date.day;
-        const pts = AI_REWARDS.milestone.insight + Math.round(g.target / 25);
-        core.addInsight(pts, 'AI 达成挑战');
-        core.st.milestones['goal_' + g.id] = { day: core.st.date.day, target: g.target };
-        out.rewards.push({ insight: pts, label: `挑战达成：7天 +${g.target}%` });
-        out.message += ` 「ゆき」达成了你设的目标（+${g.target}%），里程碑奖励 ${pts} 洞察。`;
-      }
+    // AI 挑战目标：达成的部分已在 checkGoals() 里即时处理，这里只兜底一次
+    const settled = checkGoals(core, state);
+    for (const d of settled) {
+      out.rewards.push({ insight: d.pts, label: `挑战达成：7天 +${d.goal.target}%` });
+      out.message += ` 「ゆき」达成了你设的目标（+${d.goal.target}%），里程碑奖励 ${d.pts} 洞察。`;
+    }
+
+    // 过期未达成：7 天周期一到也要清掉，并让她受点打击
+    const expired = (core.st.aiGoals || []).filter(g => !g.done && core.st.date.day - g.setDay >= 7);
+    if (expired.length) {
+      core.st.aiGoals = (core.st.aiGoals || []).filter(g => expired.indexOf(g) < 0);
+      expired.forEach(g => {
+        out.message += ` 「ゆき」没能完成你设的 +${g.target}% 挑战（7 天到期），她的信心受损了。`;
+      });
+      core.st.lastGoalResult = { day: core.st.date.day, targets: expired.map(g => g.id), ok: false };
     }
 
     c.lastResult = out;
@@ -631,7 +669,7 @@ const AIContest = (() => {
     return out;
   }
 
-  return { CYCLE, newCycle, standings, settle, roster, tickMebuki };
+  return { CYCLE, newCycle, standings, settle, roster, tickMebuki, checkGoals };
 })();
 
 /* ============================================================
@@ -715,6 +753,7 @@ const AIPlayer = (() => {
     myBets: () => myBets(),
     addGoal: (t) => addGoal(t),
     goals: () => goals(),
+    checkGoals: () => checkGoals(),
     configure: (p) => configure(p),
     enable: (o) => enable(o),
     disable: () => disable(),
@@ -798,6 +837,8 @@ const AIPlayer = (() => {
     const r = await state.agent.think(core.market);
     state.lastCallMs = Math.round(performance.now() - t0);
     state.callCount++;
+    // 每次行动后立刻看看目标有没有达成
+    try { checkGoals(); } catch (e) {}
     if (r.error) {
       state.lastError = r.error;
       if (ui) ui.onAIError(r.error);
@@ -876,6 +917,14 @@ const AIPlayer = (() => {
     return (core.st.bets || []).filter(b => b.round === c.round);
   }
 
+  /**
+   * 判定挑战目标是否达成（转发到 AIContest，保持接口不变）。
+   */
+  function checkGoals() {
+    if (!core) return [];
+    return AIContest.checkGoals(core, state);
+  }
+
   /** 给 AI 设挑战目标 */
   function addGoal(target) {
     target = Math.round(target);
@@ -889,7 +938,13 @@ const AIPlayer = (() => {
     persist();
     return { ok: true, goal: g };
   }
-  function goals() { return core.st.aiGoals || []; }
+  function goals() {
+    // 顺手过滤掉已达成却没被移除的（老存档遗留）
+    const list = core.st.aiGoals || [];
+    const alive = list.filter(g => !g.done);
+    if (alive.length !== list.length) core.st.aiGoals = alive;
+    return alive;
+  }
 
   /* ---- 配置 ---- */
   function configure(patch) {
@@ -913,7 +968,7 @@ const AIPlayer = (() => {
 
   return {
     init, api, onTick, runOnce, talk, test, spawn,
-    placeBet, myBets, addGoal, goals,
+    placeBet, myBets, addGoal, goals, checkGoals,
     configure, enable, disable, resetAgent, persist,
     // 便捷访问器（对外等价于 api 上的 getter）
     get agent() { return state.agent; },

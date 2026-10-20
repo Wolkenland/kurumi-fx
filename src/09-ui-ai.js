@@ -246,8 +246,8 @@ const AIUI = (() => {
         ${gs.length ? gs.slice(-6).reverse().map(g => {
           const cur = g.done ? 100 : U.clamp((g.current || 0) / g.target * 100, 0, 100);
           return `<div class="goal" style="margin-top:8px">
-            <div class="h"><span>7 天 +${g.target}%</span>
-              <span class="n mono">${g.done ? '✅ 达成于第' + g.doneDay + '天' : U.sfmt(g.current || 0, 1) + '%'}</span></div>
+            <div class="h"><span>+${g.target}%<span style="font-size:10px;color:var(--tx3);margin-left:5px">剩 ${Math.max(0, 7 - ((core.st.date.day || 0) - (g.setDay || 0)))} 天</span></span>
+              <span class="n mono">${g.done ? '✅ 达成' : U.sfmt(g.current || 0, 1) + '%'}</span></div>
             <div class="pb"><i class="${cur > 80 ? 'shine' : ''}" style="width:${cur}%;
               background:linear-gradient(90deg,var(--purple),var(--gold))"></i></div>
           </div>`;

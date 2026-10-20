@@ -232,7 +232,8 @@ const UI = {
       </div>
       <div class="card">
         <div class="card-title"><span class="dot"></span>交易记录<span class="right" id="closedCount"></span></div>
-        <div id="closedList"></div>
+        <div id="closedList" style="max-height:196px;overflow-y:auto;overscroll-behavior:contain"></div>
+        <button class="btn btn-ghost btn-sm" id="btnAllClosed" style="width:100%;margin-top:8px">查看全部</button>
       </div>
     `);
     wrap.appendChild(this.assignScreenId(me, 'sc-me'));
@@ -1116,8 +1117,18 @@ const UI = {
     if (typeof AIUI !== 'undefined') AIUI.render();
 
     // 交易记录
-    const cl = st.closed.slice(0, 30);
+    const LIMIT = 6;                       // 卡片里只放 6 条，多了会刷屏
+    const cl = st.closed.slice(0, LIMIT);
     $$('#closedCount').textContent = st.closed.length + ' 笔';
+    const allBtn = $$('#btnAllClosed');
+    if (allBtn) {
+      if (!st.closed.length) allBtn.style.display = 'none';
+      else {
+        allBtn.style.display = '';
+        allBtn.textContent = st.closed.length > LIMIT
+          ? `查看全部 ${st.closed.length} 笔` : '查看全部';
+      }
+    }
     $$('#closedList').innerHTML = cl.length ? cl.map(r => {
       const mrk = r.reason === 'liquidated' ? '<span class="tag dn">强平</span>' : '';
       return `<div class="log-item"><span class="t mono">${r.day}d</span>
@@ -1144,6 +1155,8 @@ const UI = {
     if (bs) bindTap(bs, () => Sheets.stats(c));
     const be = $$('#btnEndings');
     if (be) bindTap(be, () => Sheets.endings(c));
+    const bac = $$('#btnAllClosed');
+    if (bac) bindTap(bac, () => Sheets.closedList(c));
   },
 
   /* ---------- 设定屏 ---------- */
@@ -1418,6 +1431,32 @@ const Sheets = {
     $('#shOk', sh).addEventListener('click', () => this.close());
     Haptics[good ? 'win' : 'lose']();
   },
+  /** 完整交易记录（抽屉，限高滚动） */
+  closedList(core) {
+    const st = core.st;
+    const rows = st.closed.map(r => {
+      const mrk = r.reason === 'liquidated' ? '<span class="tag dn" style="font-size:9px">强平</span>' : '';
+      return `<div class="log-item" style="padding:5px 0">
+        <span class="t mono">${r.day}d</span>
+        <span class="tag ${r.dir > 0 ? 'up' : 'dn'}">${r.dir > 0 ? '多' : '空'}</span>
+        <span style="font-size:11px">${PAIRS[r.pid].short} ${r.lev}× ${mrk}</span>
+        <span class="a mono ${r.pnl >= 0 ? 'tick-up' : 'tick-dn'}">${U.sfmt(r.pnl)}</span></div>`;
+    }).join('');
+    const total = st.closed.reduce((a, r) => a + r.pnl, 0);
+    const wins = st.closed.filter(r => r.pnl > 0).length;
+    const sh = Sheets.base(`
+      <h3>📜 全部交易记录 <span style="font-size:12px;color:var(--tx3);margin-left:6px">${st.closed.length} 笔</span></h3>
+      <div class="sub">
+        累计 <b class="mono" style="color:${total >= 0 ? 'var(--up)' : 'var(--dn)'}">${U.sfmt(total)}</b>
+        · 胜 <b>${wins}</b> / 负 <b>${st.closed.length - wins}</b>
+      </div>
+      <div style="max-height:60vh;overflow-y:auto;overscroll-behavior:contain;margin-top:8px">
+        ${rows || '<div class="empty">还没有平仓记录。</div>'}
+      </div>
+      <button class="btn btn-ghost" id="closeClosed" style="width:100%;margin-top:10px">关闭</button>`);
+    $$('#closeClosed', sh).addEventListener('click', () => Sheets.close());
+  },
+
   /** 结局图鉴 */
   endings(core) {
     const seen = core.st.endingsSeen || [];
