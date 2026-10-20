@@ -14,3 +14,7 @@ dist/*.idsig
 .vscode/
 .idea/
 *.swp
+
+# 视频产物（体积大，用 Release 分发）
+dist/*.mp4
+dist/cover.png
