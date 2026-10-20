@@ -58,6 +58,8 @@ function osc(type, phase) {
 function voice(t0, dur, freq, opt) {
   opt = opt || {};
   const type = opt.type || 'sin';
+  const lp = opt.lp || 0;        // 低通截止（Hz），0 = 不滤
+  const hpCut = opt.hp || 0;     // 高通截止（Hz）
   const gain = opt.gain === undefined ? 0.2 : opt.gain;
   const pan = opt.pan || 0;
   const atk = opt.a === undefined ? 0.005 : opt.a;
@@ -73,6 +75,10 @@ function voice(t0, dur, freq, opt) {
   const gr = Math.sin((pan + 1) * Math.PI / 4);
   let ph1 = 0, ph2 = 0;
   const an = Math.max(1, atk * SR), rn = Math.max(1, rel * SR);
+  // 一阶滤波器状态
+  let lpY = 0, hpY = 0, hpPrev = 0;
+  const lpA = lp ? 1 - Math.exp(-2 * Math.PI * lp / SR) : 1;
+  const hpA = hpCut ? Math.exp(-2 * Math.PI * hpCut / SR) : 0;
 
   for (let i = 0; i < len; i++) {
     const idx = start + i;
@@ -90,6 +96,10 @@ function voice(t0, dur, freq, opt) {
     ph2 += (f * (1 + detune)) / SR;
     let v = osc(type, ph1);
     if (detune) v = (v + osc(type, ph2)) * 0.55;
+    // 低通
+    if (lp) { lpY += lpA * (v - lpY); v = lpY; }
+    // 高通（一阶差分）
+    if (hpCut) { hpY = hpA * (hpY + v - hpPrev); hpPrev = v; v = hpY; }
     const out = v * env * gain;
     bufL[idx] += out * gl;
     bufR[idx] += out * gr;
@@ -177,89 +187,50 @@ const LEAD = [
 const LEAD_HI = LEAD.map(([b, n, d]) => [b, n + 12, d]);
 
 /* ================= 编曲 ================= */
-console.log('→ 和弦铺底（Pad）');
+console.log('→ 和弦铺底（Pad，低通 1400Hz）');
 {
   for (let t = 0; t < DUR; t += BAR) {
     const ch = chordAt(t);
-    const g = 0.10 + ins(t) * 0.12;
-    const dur = BAR * 1.02;
+    const g = 0.085 + ins(t) * 0.095;
     ch.notes.forEach((n, k) => {
-      voice(t, dur, midi(n), { type: 'saw', gain: g * 0.30, a: 0.35, r: 0.5, detune: 0.006, pan: (k - 1) * 0.55 });
-      voice(t, dur, midi(n + 12), { type: 'tri', gain: g * 0.10, a: 0.5, r: 0.6, pan: (k - 1) * -0.3 });
+      voice(t, BAR * 1.02, midi(n), {
+        type: 'saw', gain: g * 0.24, a: 0.45, r: 0.7, detune: 0.005,
+        pan: (k - 1) * 0.5, lp: 1400,
+      });
     });
   }
 }
 
-console.log('→ 贝斯线（八分音符推进）');
+console.log('→ 贝斯（四分音符，低通 260Hz）');
 {
-  for (let t = 0; t < DUR - 0.1; t += BEAT / 2) {
+  for (let t = 0; t < DUR; t += BEAT) {
     const amt = drumAmt(t);
     if (amt < 0.4) continue;
     const ch = chordAt(t);
-    // 八分音符：根音 / 高八度交替，强拍加重
-    const isDown = Math.abs((t / BEAT) % 1) < 0.02;
-    const oct = Math.abs((t / (BEAT * 2)) % 2) < 0.02 ? 0 : 12;
-    const g = (0.22 + ins(t) * 0.22) * (isDown ? 1 : 0.62) * clamp(amt / 2, 0.3, 1);
-    voice(t, BEAT * 0.42, midi(ch.root + oct), {
-      type: 'saw', gain: g * 0.5, a: 0.004, r: 0.04, decay: 7, pan: 0,
+    const bi = Math.round(t / BEAT) % 4;
+    const g = (0.20 + ins(t) * 0.16) * (bi === 0 ? 1 : 0.68);
+    voice(t, BEAT * 0.72, midi(ch.root), {
+      type: 'saw', gain: g * 0.52, a: 0.005, r: 0.07, decay: 5.5, lp: 260,
     });
   }
 }
 
-console.log('→ 鼓组');
+console.log('→ 鼓组（只保留 kick / snare）');
 {
-  for (let t = 0; t < DUR - 0.05; t += BEAT) {
+  for (let t = 0; t < DUR; t += BEAT) {
     const amt = drumAmt(t);
     if (amt <= 0.01) continue;
-    const k = ins(t);
     const bi = Math.round(t / BEAT) % 4;
-    const g = 0.30 + k * 0.12;
-
-    // 底鼓：1、3 拍 + 驱动感的下拍
-    if (bi === 0 || bi === 2) kick(t, g * clamp(amt / 2, 0.25, 1.1));
-    if (amt > 2.4 && (bi === 1 || bi === 3)) kick(t, g * 0.35);
-
-    // 军鼓：2、4 拍
-    if ((bi === 1 || bi === 3) && amt > 0.8) snare(t, g * 0.9 * clamp(amt / 2, 0.3, 1));
-
-    // 拍手：加强 2、4
-    if ((bi === 1 || bi === 3) && amt > 2.2) clap(t, g * 0.55);
-
-    // 踩镲：八分
-    if (amt > 1.2) {
-      hihat(t, g * 0.5, false);
-      hihat(t + BEAT / 2, g * 0.34, false);
-    }
-    // 十六分（密集段）
-    if (amt > 2.6) {
-      hihat(t + BEAT / 4, g * 0.22, true);
-      hihat(t + BEAT * 3 / 4, g * 0.22, true);
-    }
+    const g = 0.30 + ins(t) * 0.10;
+    if (bi === 0 || bi === 2) kick(t, g * clamp(amt / 2, 0.25, 1.0));
+    if (amt > 0.9 && (bi === 1 || bi === 3)) snare(t, g * 0.70 * clamp(amt / 2, 0.3, 1));
   }
-
-  // 段落开头的 crash
-  [6, 17, 40, 57, 72, 92, 108].forEach(t => crash(t, 0.5 + ins(t) * 0.4));
+  // 只在三个大 drop 开头给一记镲
+  [40, 57, 92].forEach(t => crash(t, 0.30));
 }
 
-console.log('→ 十六分琶音');
+console.log('→ 主旋律 Lead（高通 700Hz，与贝斯错开频段）');
 {
-  for (let t = 0; t < DUR - 0.1; t += BEAT / 4) {
-    const amt = drumAmt(t);
-    if (amt < 1.6) continue;
-    const ch = chordAt(t);
-    const idx = Math.round(t / (BEAT / 4)) % (ch.notes.length * 2);
-    const n = ch.notes[idx % ch.notes.length] + (idx >= ch.notes.length ? 12 : 0);
-    const g = 0.018 + ins(t) * 0.030;
-    voice(t, BEAT * 0.22, midi(n + 12), {
-      type: 'sqr25', gain: g, a: 0.002, r: 0.03, decay: 18,
-      pan: Math.sin(t * 1.7) * 0.6,
-    });
-  }
-}
-
-console.log('→ 主旋律 Lead');
-{
-  // 第一次 drop（40s）与第二次（57s）：原调
   [40, 57].forEach((base, ri) => {
     for (let rep = 0; rep < 4; rep++) {
       const off = base + rep * (BAR * 4);
@@ -267,76 +238,81 @@ console.log('→ 主旋律 Lead');
       LEAD.forEach(([b, n, d]) => {
         const t = off + b * (BEAT / 2);
         if (t >= DUR) return;
-        const g = (0.10 + ri * 0.02) * (0.8 + ins(t) * 0.5);
-        voice(t, d * BEAT * 0.75, midi(n), {
-          type: 'sqr', gain: g, a: 0.004, r: 0.10, decay: 3.2, pan: -0.12,
-        });
-        voice(t, d * BEAT * 0.75, midi(n + 12), {
-          type: 'tri', gain: g * 0.35, a: 0.004, r: 0.10, decay: 4.5, pan: 0.25,
+        voice(t, d * BEAT * 0.70, midi(n), {
+          type: 'sqr', gain: 0.070, a: 0.005, r: 0.13, decay: 2.6,
+          hp: 700, lp: 3800, pan: -0.15,
         });
       });
     }
   });
-
-  // 第三次 drop（92s）：升高八度，最亮
   for (let rep = 0; rep < 4; rep++) {
     const off = 92 + rep * (BAR * 4);
     if (off >= 108) break;
     LEAD_HI.forEach(([b, n, d]) => {
       const t = off + b * (BEAT / 2);
       if (t >= DUR) return;
-      voice(t, d * BEAT * 0.75, midi(n), {
-        type: 'sqr', gain: 0.095, a: 0.004, r: 0.10, decay: 3.0, pan: -0.1,
-      });
-      voice(t, d * BEAT * 0.75, midi(n + 12), {
-        type: 'tri', gain: 0.032, a: 0.004, r: 0.10, decay: 4.2, pan: 0.3,
+      voice(t, d * BEAT * 0.70, midi(n), {
+        type: 'sqr', gain: 0.060, a: 0.005, r: 0.13, decay: 2.2,
+        hp: 800, lp: 4500, pan: -0.10,
       });
     });
   }
 }
 
-console.log('→ 场景音效');
+console.log('→ 场景音效（只留必要提示）');
 {
-  // 开场：心跳 + 蓄力的上升音
+  // 开场心跳
   for (let i = 0; i < 3; i++) {
     const t = 0.5 + i * 1.25;
-    kick(t, 0.34); kick(t + 0.24, 0.22);
+    kick(t, 0.24); kick(t + 0.24, 0.15);
   }
-  voice(0.2, 5.4, midi(45), { type: 'saw', gain: 0.05, a: 3.0, r: 1.2, decay: 0.2 });
-
-  // 每次 drop 前的 riser（上升噪声）
-  [38.5, 55.5, 90.5].forEach(t => {
-    noise(t, 1.9, 0.09, { hp: 0.05, decay: -1.6 });   // 负衰减 = 渐强
-  });
-
-  // 爆仓三连（53 / 55.2 / 57.4s）
+  // 三声爆仓（低频闷击，不刺耳）
   [53.0, 55.2, 57.4].forEach((t, i) => {
-    voice(t, 0.6, midi(26 - i * 2), { type: 'sin', gain: 0.42, a: 0.001, r: 0.05, decay: 7, slide: -0.35 });
-    noise(t, 0.35, 0.20, { hp: 0.5, decay: 16 });
-    voice(t + 0.01, 0.5, midi(90), { type: 'sqr25', gain: 0.020, a: 0.001, r: 0.2, decay: 9 });
+    voice(t, 0.55, midi(26 - i * 2), {
+      type: 'sin', gain: 0.32, a: 0.001, r: 0.08, decay: 8, slide: -0.3, lp: 180,
+    });
+    noise(t, 0.26, 0.075, { hp: 0.40, decay: 22 });
   });
-
-  // 借贷：细密计算器点击
-  for (let t = 58.5; t < 71; t += BEAT / 4) {
-    noise(t, 0.02, 0.030, { hp: 0.85, decay: 60 });
-  }
-
-  // AI：电子提示
+  // AI 提示音（很轻，高频短促）
   [74.4, 76.1, 77.8].forEach((t, i) => {
-    voice(t, 0.16, midi(86 + i * 5), { type: 'sqr25', gain: 0.055, a: 0.002, r: 0.05, decay: 14, pan: 0.35 });
-  });
-
-  // 洞察：明亮上行
-  [93.2, 93.7, 94.2, 94.7, 95.2].forEach((t, i) => {
-    voice(t, 0.5, midi(72 + i * 3), { type: 'tri', gain: 0.075, a: 0.003, r: 0.2, decay: 5, pan: (i - 2) * 0.25 });
-  });
-
-  // 结尾：大三和弦长音收束
-  [110, 115.5].forEach((t, i) => {
-    [57, 61, 64].forEach((n, k) => {
-      voice(t, 6.0 - i, midi(n), { type: 'tri', gain: 0.055, a: 0.8, r: 2.2, pan: (k - 1) * 0.4 });
+    voice(t, 0.13, midi(86 + i * 5), {
+      type: 'sqr25', gain: 0.026, a: 0.002, r: 0.05, decay: 18, hp: 900, pan: 0.30,
     });
   });
+  // 洞察上行
+  [93.2, 93.7, 94.2, 94.7].forEach((t, i) => {
+    voice(t, 0.40, midi(72 + i * 3), {
+      type: 'tri', gain: 0.042, a: 0.004, r: 0.22, decay: 6, hp: 420, pan: (i - 1.5) * 0.30,
+    });
+  });
+  // 结尾长音
+  [57, 61, 64].forEach((n, k) => {
+    voice(110, 8.0, midi(n), { type: 'tri', gain: 0.040, a: 1.0, r: 3.0, lp: 2000, pan: (k - 1) * 0.40 });
+  });
+}
+
+/* ========== Sidechain：每次 kick 时压低整体，制造呼吸感 ========== */
+console.log('→ Sidechain 压缩（kick 触发）');
+{
+  const kicks = [];
+  for (let t = 0; t < DUR; t += BEAT) {
+    const amt = drumAmt(t);
+    if (amt <= 0.01) continue;
+    const bi = Math.round(t / BEAT) % 4;
+    if (bi === 0 || bi === 2) kicks.push(t);
+  }
+  for (const kt of kicks) {
+    const st = Math.floor(kt * SR);
+    const len = Math.floor(0.16 * SR);
+    for (let i = 0; i < len; i++) {
+      const idx = st + i;
+      if (idx >= N) break;
+      // 起始压到 0.55，按指数回到 1
+      const d = 0.55 + 0.45 * Math.min(1, (i / SR) / 0.16);
+      bufL[idx] *= d;
+      bufR[idx] *= d;
+    }
+  }
 }
 
 /* ================= 混响 ================= */
@@ -357,15 +333,25 @@ console.log('→ 混响与母带');
   }
 }
 
+/* 按场景强度做整体增益：安静段真的安静，drop 才炸得起来 */
+{
+  for (let i = 0; i < N; i++) {
+    const t = i / SR;
+    const g = 0.42 + ins(t) * 0.58;      // 0.42 ~ 1.00
+    bufL[i] *= g;
+    bufR[i] *= g;
+  }
+}
+
 {
   let peak = 0;
   for (let i = 0; i < N; i++) peak = Math.max(peak, Math.abs(bufL[i]), Math.abs(bufR[i]));
-  const g = peak > 0 ? 0.90 / peak : 1;
+  const g = peak > 0 ? 0.88 / peak : 1;
   for (let i = 0; i < N; i++) {
-    bufL[i] = Math.tanh(bufL[i] * g * 1.15) * 0.96;
-    bufR[i] = Math.tanh(bufR[i] * g * 1.15) * 0.96;
+    bufL[i] = Math.tanh(bufL[i] * g) * 0.97;
+    bufR[i] = Math.tanh(bufR[i] * g) * 0.97;
   }
-  console.log(`   峰值 ${peak.toFixed(3)} → 归一化`);
+  console.log(`   峰值 ${peak.toFixed(3)} → 归一化（含动态增益）`);
 }
 
 /* ================= 写 WAV ================= */
