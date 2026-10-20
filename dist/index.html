@@ -4323,6 +4323,10 @@ const AIPlayer = (() => {
       if (saved.agent.lastQuote) state.agent.lastQuote = saved.agent.lastQuote;
       if (saved.agent.actions) state.agent.actions = saved.agent.actions;
       if (saved.agent.errors) state.agent.errors = saved.agent.errors;
+      // 老存档的 aggressive=0.6 是"保守版"遗留值，升级到进攻型
+      if (saved.agent.aggressive) {
+        state.agent.aggressive = Math.max(0.72, saved.agent.aggressive);
+      }
     }
     state.mebuki = saved.mebuki || { start: 500000, equity: 500000, seed: (Math.random() * 1e9) | 0 };
     state.contest = c.st.contest;
@@ -4383,7 +4387,7 @@ const AIPlayer = (() => {
     const a = new Agent({
       name: o.name || 'ゆき',
       cash: o.cash || 300000,
-      aggressive: o.aggressive === undefined ? 0.6 : o.aggressive,
+      aggressive: o.aggressive === undefined ? 0.72 : o.aggressive,
       personality: o.personality,
       core: core,
     });
