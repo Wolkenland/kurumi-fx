@@ -336,8 +336,13 @@ const Chapters = (() => {
         fired[s.id] = true;
         core.st.chapterDone[s.id] = 1;
         core.st.chapter++;
+        // 章节奖励：每推进一章给 1 点洞察（序章除外，那是白送的）
+        if (s.id !== 'prologue') {
+          core.st.insightPts = (core.st.insightPts || 0) + 1;
+          core.pushLog('chapter', `剧情推进：${s.title}（+1 洞察）`, 0);
+        }
         try { s.onEnter(core, ui); } catch (e) { console.warn('chapter', s.id, e); }
-        ui.toast('剧情推进：' + s.title, 'up');
+        ui.toast('剧情推进：' + s.title + (s.id !== 'prologue' ? '　+1 洞察' : ''), 'up');
         setTimeout(() => ui.renderAll(), 200);
         core.save();
         break;

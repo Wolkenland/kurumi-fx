@@ -651,6 +651,16 @@ const UI = {
         setTimeout(() => Sheets.msg('取立て', `【${ev.def.name}】的催收来了。<br>当前负债 <b class="mono" style="color:var(--dn)">${U.fmt(ev.amount)} 円</b>。<br>${ev.def.danger >= 4 ? '「再不还，就不是钱的问题了。」' : '「还款日到了哦。」'}`, ev.def.danger >= 4 ? 'bad' : 'warn'), 400);
         break;
       }
+      case 'daily': {
+        const list = ev.list || [];
+        if (list.length) {
+          const names = list.map(x => x.def.name).join('、');
+          const pts = list.reduce((a, x) => a + x.pts, 0);
+          this.toast(`📋 每日任务：${names}　+${pts} 洞察`, 'up');
+          Sfx.coin();
+        }
+        break;
+      }
       case 'achievement': {
         const list = ev.list || [];
         if (list.length) {
@@ -920,6 +930,41 @@ const UI = {
       <div style="margin-top:10px;font-size:11px;color:var(--tx3);line-height:1.6">
         冷静值越低，越容易做出"再加仓一点"的决定；贪欲越高，杠杆会越抬越高。
       </div>
+      ${(() => {
+        const dp = c.dailyProgress();
+        if (!dp.length) return '';
+        const doneN = dp.filter(x => x.done).length;
+        const allDone = doneN === dp.length;
+        return `<div style="margin-top:10px;padding:10px 11px;border-radius:12px;
+            background:${allDone ? 'rgba(61,220,151,.10)' : 'rgba(255,255,255,.04)'};
+            border:1px solid ${allDone ? 'rgba(61,220,151,.35)' : 'rgba(255,255,255,.10)'}">
+          <div style="display:flex;align-items:baseline;gap:8px">
+            <span style="font-size:12.5px;font-weight:800;color:${allDone ? 'var(--up)' : 'var(--tx)'}">
+              📋 今日任务</span>
+            <span style="font-size:10.5px;color:var(--tx3);margin-left:auto">
+              ${doneN} / ${dp.length}${allDone ? '　全清 +' + DAILY_ALL_BONUS : ''}</span>
+          </div>
+          ${dp.map(x => `
+            <div style="display:flex;align-items:center;gap:8px;padding:6px 0;
+                border-bottom:1px solid rgba(255,255,255,.04)">
+              <span style="flex:0 0 auto;width:14px;height:14px;border-radius:4px;
+                display:flex;align-items:center;justify-content:center;font-size:9px;
+                background:${x.done ? 'rgba(61,220,151,.3)' : 'rgba(255,255,255,.06)'};
+                color:${x.done ? 'var(--up)' : 'var(--tx3)'};
+                border:1px solid ${x.done ? 'rgba(61,220,151,.6)' : 'rgba(255,255,255,.12)'}">
+                ${x.done ? '✓' : ''}</span>
+              <div style="flex:1;min-width:0">
+                <span style="font-size:11.5px;font-weight:700;color:${x.done ? 'var(--tx3)' : 'var(--tx)'}">
+                  ${x.name}</span>
+                <span style="font-size:10px;color:var(--tx3);margin-left:5px">${x.desc}</span>
+              </div>
+              ${x.when === 'settle' && !x.done
+                ? '<span class="tag" style="font-size:8.5px;background:rgba(140,180,255,.15);color:var(--blue);border-color:rgba(140,180,255,.3)">日落结算</span>'
+                : `<span class="mono" style="font-size:10px;color:var(--tx3)">${x.prog}/${x.goal}</span>`}
+              <span style="font-size:10.5px;font-weight:700;color:var(--gold);flex:0 0 auto">+${x.pts}</span>
+            </div>`).join('')}
+        </div>`;
+      })()}
       <div class="row" style="margin-top:10px;gap:8px">
         <button class="btn btn-ghost btn-sm" id="btnAch" style="flex:1">
           🏆 成就 <b style="color:var(--gold)">${(c.st.achievements || []).length}</b>/${ACHIEVEMENTS.length}</button>

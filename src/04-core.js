@@ -116,6 +116,35 @@ const ACHIEVEMENTS = [
     test: c => ['fees','rebate','intel','credit','swap','guts'].some(k => (c.st.perks[k] || 0) >= c.perkMax(k)) },
 ];
 
+/* ================= 每日任务 ================= */
+/**
+ * 每天刷新 3 个，完成得洞察点。
+ * when: 'instant' 达成即刻结算 / 'settle' 当天结束时结算
+ */
+const DAILY_TASKS = [
+  { id: 'close3',   when: 'instant', pts: 1, name: '做三笔',
+    desc: '今天平仓 3 次', goal: 3, prog: c => c.st.dailyStat.closed },
+  { id: 'profit',   when: 'instant', pts: 2, name: '今日为正',
+    desc: '今天的已实现盈亏为正', goal: 1, prog: c => c.st.dailyStat.pnl > 0 ? 1 : 0 },
+  { id: 'nail',     when: 'instant', pts: 1, name: '小赚一笔',
+    desc: '单笔平仓盈利 ≥ 5000 円', goal: 1, prog: c => c.st.dailyStat.bestWin >= 5000 ? 1 : 0 },
+  { id: 'trypair',  when: 'instant', pts: 2, name: '换换口味',
+    desc: '交易一个今天还没碰过的品种', goal: 2, prog: c => c.st.dailyStat.pairsToday },
+  { id: 'repay',    when: 'instant', pts: 2, name: '还一点',
+    desc: '今天偿还一部分负债', goal: 1, prog: c => c.st.dailyStat.repaid > 0 ? 1 : 0 },
+  { id: 'noborrow', when: 'settle', pts: 2, name: '不借钱',
+    desc: '一整天没有新增借款', goal: 1, prog: c => c.st.dailyStat.borrowed === 0 ? 1 : 0 },
+  { id: 'noliq',    when: 'settle', pts: 1, name: '活着',
+    desc: '一整天没有被强制平仓', goal: 1, prog: c => c.st.dailyStat.liquidated === 0 ? 1 : 0 },
+  { id: 'calm',     when: 'settle', pts: 1, name: '保持冷静',
+    desc: '日落时冷静值 ≥ 60', goal: 1, prog: c => c.st.stats.mental >= 60 ? 1 : 0 },
+  { id: 'nodeposit',when: 'settle', pts: 2, name: '自力更生',
+    desc: '一整天没有入金', goal: 1, prog: c => c.st.dailyStat.deposited === 0 ? 1 : 0 },
+];
+
+/** 全部完成的额外奖励 */
+const DAILY_ALL_BONUS = 2;
+
 const ACH_CATS = {
   trade:   { name: '交易', color: '#3ddc97' },
   survive: { name: '生存', color: '#8cb4ff' },
@@ -178,8 +207,12 @@ function initialState() {
              holdCount: 0,         // 时长统计样本数
              perksBought: 0, byPair: {} },  // 买过多少次技能 / 分品种统计
     achievements: [],              // 已解锁的成就 id
-    dailyTask: null,               // 每日任务
-    dailyDone: 0,
+    dailyTasks: [],                // 今日任务（3 个）
+    dailyStat: { closed: 0, pnl: 0, liquidated: 0, borrowed: 0, repaid: 0,
+                 bestWin: 0, deposited: 0, pairsToday: 0 },
+    dailyDoneIds: [],              // 今天已完成的任务 id
+    dailyAllDone: false,           // 今天是否全部完成
+    dailyClaimed: 0,               // 累计完成过的任务数
     flags: { tutorial: false, metMochiko: false, metMebuki: false, mochikoDeal: false,
              metYasuko: false, hasJob: true, despairSeen: false, dadMoney: false,
              fxQuit: false, prologue: false },
@@ -207,6 +240,10 @@ class Core {
     this.slot = 0;                 // 当前存档槽（0..2）
     this.st = initialState();
     this.market = new Market(this.st.seed);
+    // 第一天也要有任务（否则要等到第二天 newDay 才生成）
+    if (!Array.isArray(this.st.dailyTasks) || !this.st.dailyTasks.length) {
+      this.genDailyTasks();
+    }
     this.timers = U.makeTimers();
     this.tickMs = 700;
     this.acc = 0;
@@ -310,6 +347,85 @@ class Core {
     this.st.insightPts += n;
     this.emit('insight', { n, why, total: this.st.insightPts });
     return this.st.insightPts;
+  }
+
+  /* ===== 每日任务 ===== */
+  /** 抽 3 个当日任务（尽量同时包含即时型与结算型） */
+  genDailyTasks(rng) {
+    const r = rng || Math.random;
+    const instant = DAILY_TASKS.filter(t => t.when === 'instant');
+    const settle = DAILY_TASKS.filter(t => t.when === 'settle');
+    const pick = (arr, n) => {
+      const a = arr.slice();
+      const out = [];
+      while (out.length < n && a.length) out.push(a.splice(Math.floor(r() * a.length), 1)[0]);
+      return out;
+    };
+    const chosen = pick(instant, 2).concat(pick(settle, 1));
+    this.st.dailyTasks = chosen.map(t => t.id);
+    this.st.dailyDoneIds = [];
+    this.st.dailyAllDone = false;
+    this.st.dailyStat = { closed: 0, pnl: 0, liquidated: 0, borrowed: 0, repaid: 0,
+                          bestWin: 0, deposited: 0, pairsToday: 0 };
+    return chosen;
+  }
+
+  /** 取任务定义 */
+  dailyDef(id) { return DAILY_TASKS.find(t => t.id === id) || null; }
+
+  /**
+   * 检查任务完成
+   * @param phase 'instant' 只查即时型；'settle' 结算当天（两类都查）
+   */
+  checkDaily(phase) {
+    if (this.agent) return [];
+    const st = this.st;
+    if (!Array.isArray(st.dailyTasks) || !st.dailyTasks.length) return [];
+    st.dailyDoneIds = st.dailyDoneIds || [];
+    const got = [];
+    for (const id of st.dailyTasks) {
+      if (st.dailyDoneIds.indexOf(id) >= 0) continue;
+      const def = this.dailyDef(id);
+      if (!def) continue;
+      if (phase === 'instant' && def.when !== 'instant') continue;
+      let prog = 0;
+      try { prog = def.prog(this) || 0; } catch (e) { prog = 0; }
+      if (prog >= def.goal) {
+        st.dailyDoneIds.push(id);
+        st.insightPts += def.pts;
+        st.dailyClaimed = (st.dailyClaimed || 0) + 1;
+        got.push({ def, pts: def.pts });
+      }
+    }
+    // 全部完成
+    if (!st.dailyAllDone && st.dailyDoneIds.length >= st.dailyTasks.length) {
+      st.dailyAllDone = true;
+      st.insightPts += DAILY_ALL_BONUS;
+      got.push({ def: { name: '今日全清', pts: DAILY_ALL_BONUS }, pts: DAILY_ALL_BONUS, bonus: true });
+    }
+    if (got.length) {
+      this.fx('coin'); this.hap('win');
+      got.forEach(g => this.pushLog('daily', `每日任务：${g.def.name}（+${g.pts} 洞察）`, 0));
+      this.emit('daily', { list: got });
+    }
+    return got;
+  }
+
+  /** 今日任务进度（供界面） */
+  dailyProgress() {
+    const st = this.st;
+    if (!Array.isArray(st.dailyTasks) || !st.dailyTasks.length) return [];
+    return st.dailyTasks.map(id => {
+      const def = this.dailyDef(id);
+      if (!def) return null;
+      let prog = 0;
+      try { prog = def.prog(this) || 0; } catch (e) { prog = 0; }
+      return {
+        id, name: def.name, desc: def.desc, pts: def.pts, when: def.when,
+        goal: def.goal, prog: Math.min(prog, def.goal),
+        done: (st.dailyDoneIds || []).indexOf(id) >= 0,
+      };
+    }).filter(Boolean);
   }
 
   /* ===== 成就 ===== */
@@ -449,6 +565,17 @@ class Core {
   newDay() {
     const d = this.st.date.day;
     this.st.stats.daysPlayed = d;
+
+    // ---- 每日任务：先结算昨天（结算型任务在这一刻判定）----
+    if (!this.agent) {
+      if (Array.isArray(this.st.dailyTasks) && this.st.dailyTasks.length) {
+        this.checkDaily('settle');
+      }
+      this.st.date.day = d;          // checkDaily 可能没改 day，这里顺手纠正
+      this.genDailyTasks();
+    } else {
+      this.st.dailyTasks = [];
+    }
     // 隔夜利息（周三三倍）
     let swap = 0;
     const mult = (d % 7 === 2) ? 3 : (d % 7 === 5 || d % 7 === 6 ? 0 : 1);
@@ -533,11 +660,18 @@ class Core {
     st2.maxLev = Math.max(st2.maxLev || 1, lev);
     if (lev === 1) st2.usedLev1 = true;
     st2.maxPositions = Math.max(st2.maxPositions || 0, this.st.positions.length + 1);
+    const DS2 = this.st.dailyStat;
+    if (DS2) {
+      if (!DS2._pairs) DS2._pairs = {};
+      DS2._pairs[pid] = true;
+      DS2.pairsToday = Object.keys(DS2._pairs).length;
+    }
     this.st.stats.greed = U.clamp(this.st.stats.greed + (lev >= 25 ? 2.5 : lev >= 10 ? 1.2 : 0.4), 0, 100);
     this.pushLog(dir > 0 ? 'buy' : 'sell', `${s.def.short} ${dir > 0 ? '买' : '卖'} ${U.fmt(units)}通貨 ×${lev}倍`, 0);
     this.fx('buy'); this.hap('press');
     this.emit('open', { pos });
     this.checkAchievements();
+    this.checkDaily('instant');
     this.save();
     return { ok: true, pos };
   }
@@ -571,6 +705,16 @@ class Core {
       const dd = (1 - eq / S.peakEquity) * 100;
       S.maxDrawdown = Math.max(S.maxDrawdown || 0, dd);
     }
+    // 每日任务统计
+    const DS = this.st.dailyStat;
+    if (DS) {
+      if (!DS._pairs) DS._pairs = {};
+      DS.closed = (DS.closed || 0) + 1;
+      DS.pnl = (DS.pnl || 0) + pnl;
+      if (pnl > (DS.bestWin || 0)) DS.bestWin = pnl;
+      DS._pairs[p.pid] = true;
+      DS.pairsToday = Object.keys(DS._pairs).length;
+    }
     // 分品种统计
     if (!S.byPair) S.byPair = {};
     const bp = S.byPair[p.pid] || (S.byPair[p.pid] = { n: 0, pnl: 0, wins: 0 });
@@ -601,6 +745,7 @@ class Core {
     this.hap('tap');
     this.emit('close', { rec, pnl });
     this.checkAchievements();
+    this.checkDaily('instant');
     this.save();
     return { ok: true, pnl, rec };
   }
@@ -625,6 +770,7 @@ class Core {
     this.st.stats.totalPnl += pnl;
     this.st.stats.mental = U.clamp(this.st.stats.mental - 18 * this.mentalLossMul(), 0, 100);
     this.st.stats.liquidated++;
+    if (this.st.dailyStat) this.st.dailyStat.liquidated = (this.st.dailyStat.liquidated || 0) + 1;
     this.checkAchievements();
     if (pnl < this.st.stats.worstLoss) this.st.stats.worstLoss = pnl;
     const i = this.st.positions.indexOf(p);
@@ -706,6 +852,7 @@ class Core {
     if (amount > pool + 0.5) return { ok: false, why: '没有这么多钱' };
     if (fromWallet) this.st.wallet -= amount; else this.spendExternal(amount);
     this.st.cash += amount;
+    if (this.st.dailyStat) this.st.dailyStat.deposited = (this.st.dailyStat.deposited || 0) + 1;
     this.fx('coin'); this.hap('tap');
     this.pushLog('deposit', '入金', amount);
     this.checkRisk();
@@ -742,6 +889,7 @@ class Core {
     const got = amount - fee;
     this.st.loans.push({ pid, amount, since: this.st.date.day, rollDay: this.st.date.day + def.grace, principal: amount });
     this.st.wallet += got;
+    if (this.st.dailyStat) this.st.dailyStat.borrowed = (this.st.dailyStat.borrowed || 0) + 1;
     this.st.stats.loansTaken = this.st.stats.loansTaken || {};
     this.st.stats.loansTaken[pid] = true;
     this.st.flags.hasBorrowed = true;
@@ -753,6 +901,7 @@ class Core {
     this.bark('loan', pid);
     this.emit('borrow', { def, amount, fee });
     this.checkAchievements();
+    this.checkDaily('instant');
     this.save();
     return { ok: true, got, fee };
   }
@@ -773,10 +922,12 @@ class Core {
     this.st.wallet -= fromWallet;
     this.st.cash -= (paid - fromWallet);
     this.st.loans = this.st.loans.filter(l => l.amount > 0.5);
+    if (paid > 0 && this.st.dailyStat) this.st.dailyStat.repaid = (this.st.dailyStat.repaid || 0) + paid;
     if (def.danger >= 4 && paid > 0) this.st.stats.mental = U.clamp(this.st.stats.mental + 4, 0, 100);
     this.pushLog('repay', `${def.name} 返済 ${U.fmt(paid)} 円`, 0);
     this.fx('coin'); this.hap('tap');
     this.emit('repay', { pid, paid });
+    this.checkDaily('instant');
     this.save();
     return { ok: true, paid };
   }
