@@ -140,6 +140,10 @@ const UI = {
       <div class="pair-tabs" id="pairTabs"></div>
       <div id="chartWrap">
         <canvas id="chart"></canvas>
+        <div id="swanTag" style="display:none;position:absolute;top:7px;left:50%;transform:translateX(-50%);
+          padding:3px 12px;border-radius:20px;background:rgba(255,46,91,.92);color:#fff;
+          font-size:10.5px;font-weight:800;letter-spacing:.05em;pointer-events:none;
+          box-shadow:0 2px 12px rgba(255,46,91,.5);z-index:5"></div>
         <div class="chart-badge">
           <span class="p" id="cpPrice">—</span>
           <span class="d" id="cpDelta">—</span>
@@ -573,6 +577,18 @@ const UI = {
     bar.style.background = rate < 100 ? 'var(--dn)' : rate < 200 ? 'var(--gold)' : 'var(--up)';
     $$('#hudDate').textContent = this.dateText();
 
+    // 黑天鹅警示条
+    const swTag = $$('#swanTag');
+    if (swTag) {
+      const sw = c.market.swan;
+      if (sw) {
+        swTag.style.display = 'block';
+        swTag.textContent = '⚡ ' + sw.ev.name + '　点差 ' + sw.spreadMul + '×';
+      } else {
+        swTag.style.display = 'none';
+      }
+    }
+
     // 「入金」按钮直接显示钱包里还有多少钱（之前要点了才知道）
     const dep = $$('#btnDeposit');
     if (dep) {
@@ -649,6 +665,29 @@ const UI = {
       }
       case 'collect': {
         setTimeout(() => Sheets.msg('取立て', `【${ev.def.name}】的催收来了。<br>当前负债 <b class="mono" style="color:var(--dn)">${U.fmt(ev.amount)} 円</b>。<br>${ev.def.danger >= 4 ? '「再不还，就不是钱的问题了。」' : '「还款日到了哦。」'}`, ev.def.danger >= 4 ? 'bad' : 'warn'), 400);
+        break;
+      }
+      case 'blackswan': {
+        const sw = ev;
+        const rows = (sw.hit || []).map(h =>
+          `<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px">
+            <span style="color:${PAIRS[h.id].color}">${PAIRS[h.id].short}</span>
+            <span class="mono" style="color:var(--dn);font-weight:700">${h.pct >= 0 ? '+' : ''}${h.pct.toFixed(1)}%</span>
+          </div>`).join('');
+        setTimeout(() => Sheets.msg('⚡ 黑天鹅',
+          `<div style="font-size:13px;font-weight:700;color:var(--dn);line-height:1.6">${sw.ev.head}</div>
+           <div style="margin:9px 0">${rows}</div>
+           <div style="font-size:11px;color:var(--tx2);line-height:1.7">${sw.ev.desc}</div>
+           <div style="margin-top:9px;padding:8px 10px;border-radius:9px;background:rgba(255,77,109,.12);
+             border:1px solid rgba(255,77,109,.3);font-size:11.5px">
+             点差扩大 <b style="color:var(--dn)">${sw.spreadMul} 倍</b>，持续约 ${Math.round((sw.ev.dur || 40) / 24)} 天。<br>
+             <span style="color:var(--tx3)">这时候挂止损单，可能直接被打在异常价位上。</span>
+           </div>`, 'bad'), 300);
+        break;
+      }
+      case 'ending': {
+        const e = ev.ending;
+        setTimeout(() => this.showEnding(e), 500);
         break;
       }
       case 'daily': {
@@ -905,6 +944,43 @@ const UI = {
   },
 
   /* ---------- 人物屏 ---------- */
+  /** 结局全屏画面 */
+  showEnding(e) {
+    // 用实例字段追踪，避免 getElementById 查一个动态创建的节点
+    if (this._endingVeil) { this._endingVeil.remove(); this._endingVeil = null; }
+    const veil = el('div', '', '');
+    veil.setAttribute('data-ending-veil', '1');
+    veil.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;' +
+      'align-items:center;justify-content:center;padding:26px;text-align:center;' +
+      'background:radial-gradient(circle at 50% 30%, rgba(20,26,40,.98), rgba(3,5,9,.99));' +
+      'opacity:0;transition:opacity .8s ease';
+    const col = e.tone === 'good' ? 'var(--gold)' : 'var(--dn)';
+    veil.innerHTML = `
+      <div style="font-size:12px;letter-spacing:.35em;color:${col};opacity:.8">
+        ${e.tone === 'good' ? 'E N D I N G' : 'E N D I N G'}</div>
+      <div style="margin-top:18px;font-size:13px;color:var(--tx3)">结局 · ${e.name}</div>
+      <div style="margin-top:10px;font-size:26px;font-weight:800;color:var(--tx);line-height:1.4">
+        ${e.title}</div>
+      <div style="margin-top:22px;max-width:520px;font-size:13.5px;line-height:2;color:var(--tx2)">
+        ${e.body}</div>
+      <button class="btn btn-gold" style="margin-top:30px;min-width:180px" id="endingOk">
+        继续（自由模式）</button>
+      <div style="margin-top:12px;font-size:11px;color:var(--tx3)">
+        已经走过这个结局，但游戏不会结束——就像现实一样。</div>`;
+    document.body.appendChild(veil);
+    this._endingVeil = veil;
+    requestAnimationFrame(() => { veil.style.opacity = '1'; });
+    const close = () => {
+      veil.style.opacity = '0';
+      setTimeout(() => {
+        veil.remove();
+        if (this._endingVeil === veil) this._endingVeil = null;
+      }, 700);
+    };
+    veil.querySelector('#endingOk').addEventListener('click', close);
+    Sfx.bigwin(); Haptics.win();
+  },
+
   /** 毫秒 → mm:ss */
   fmtCd(ms) {
     const s = Math.max(0, Math.ceil(ms / 1000));
@@ -978,6 +1054,10 @@ const UI = {
         <button class="btn btn-ghost btn-sm" id="btnAch" style="flex:1">
           🏆 成就 <b style="color:var(--gold)">${(c.st.achievements || []).length}</b>/${ACHIEVEMENTS.length}</button>
         <button class="btn btn-ghost btn-sm" id="btnStats" style="flex:1">📊 交易统计</button>
+      </div>
+      <div class="row" style="margin-top:8px;gap:8px">
+        <button class="btn btn-ghost btn-sm" id="btnEndings" style="flex:1">
+          🎬 结局 <b style="color:var(--gold)">${(c.st.endingsSeen || []).length}</b>/${ENDINGS.length}</button>
       </div>
       <div style="margin-top:10px;padding:9px 11px;border-radius:11px;
         background:rgba(140,180,255,.07);border:1px solid rgba(140,180,255,.22);font-size:11px;line-height:1.72">
@@ -1062,6 +1142,8 @@ const UI = {
     if (ba) bindTap(ba, () => Sheets.achievements(c));
     const bs = $$('#btnStats');
     if (bs) bindTap(bs, () => Sheets.stats(c));
+    const be = $$('#btnEndings');
+    if (be) bindTap(be, () => Sheets.endings(c));
   },
 
   /* ---------- 设定屏 ---------- */
@@ -1336,6 +1418,32 @@ const Sheets = {
     $('#shOk', sh).addEventListener('click', () => this.close());
     Haptics[good ? 'win' : 'lose']();
   },
+  /** 结局图鉴 */
+  endings(core) {
+    const seen = core.st.endingsSeen || [];
+    const rows = ENDINGS.map(e => {
+      const got = seen.indexOf(e.id) >= 0;
+      const col = e.tone === 'good' ? 'var(--gold)' : 'var(--dn)';
+      return `<div style="padding:10px 0;border-bottom:1px solid rgba(255,255,255,.05);
+          ${got ? '' : 'opacity:.45'}">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:11px;font-weight:800;color:${got ? col : 'var(--tx3)'}">
+            ${got ? '◆' : '◇'} ${e.name}</span>
+          <span style="font-size:10px;color:var(--tx3);margin-left:auto">
+            ${got ? '已达成' : '未触发'}</span>
+        </div>
+        <div style="font-size:11.5px;color:${got ? 'var(--tx2)' : 'var(--tx3)'};margin-top:5px;line-height:1.6">
+          ${got ? e.title : '？？？'}</div>
+      </div>`;
+    }).join('');
+    const sh = Sheets.base(`
+      <h3>🎬 结局 <span style="font-size:13px;color:var(--gold);margin-left:6px">${seen.length} / ${ENDINGS.length}</span></h3>
+      <div class="sub">走到这些状态时会触发一段收束。触发后游戏不会结束，你可以继续。</div>
+      <div style="max-height:56vh;overflow-y:auto;margin-top:8px">${rows}</div>
+      <button class="btn btn-ghost" id="endClose" style="width:100%;margin-top:10px">关闭</button>`);
+    $$('#endClose', sh).addEventListener('click', () => Sheets.close());
+  },
+
   /** 成就抽屉 */
   achievements(core) {
     const sum = core.achSummary();

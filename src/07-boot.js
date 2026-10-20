@@ -43,7 +43,7 @@
     ui.renderAll();
 
     // 调试句柄（只读用途；不给任何外部通讯能力）
-    window.__FXK__ = { core, ui, Tutorials, Chapters, AIUI, AIPlayer, LLM, version: '1.3.0' };
+    window.__FXK__ = { core, ui, Tutorials, Chapters, AIUI, AIPlayer, LLM, version: '1.4.0' };
 
     // 序章
     if (had.ok && (core.st.stats.daysPlayed > 0 || core.st.stats.level > 1)) {

@@ -85,9 +85,26 @@ class CandleChart {
       if (bars[i].h > hi) hi = bars[i].h;
       if (bars[i].l < lo) lo = bars[i].l;
     }
-    if (this.liqLine !== null && isFinite(this.liqLine)) { hi = Math.max(hi, this.liqLine); lo = Math.min(lo, this.liqLine); }
-    if (this.entryLine !== null && isFinite(this.entryLine)) { hi = Math.max(hi, this.entryLine); lo = Math.min(lo, this.entryLine); }
     if (hi === -Infinity) { hi = 1; lo = 0; }
+
+    /* 强平线 / 入场价只有在「离价格不太远」时才参与 Y 轴范围。
+       否则 100 倍杠杆下强平线可能远在几十点之外，
+       会把整张图压成一条直线——买入后价格走势完全看不出来。 */
+    const span0 = Math.max(1e-9, hi - lo);
+    const ref = this.px || hi;
+    const far = (v) => v > hi ? v - hi : (v < lo ? lo - v : 0);
+    /* 阈值同时看「波动跨度」和「现价的百分比」：
+       取两者较大值。这样即使当天波动很小，只要强平线在现价 3% 以内
+       （100 倍杠杆下已经非常危险）也会被画出来；
+       而远在几十点外的强平线则交给边缘指示，不去压扁走势。 */
+    const liqLimit = Math.max(span0 * 0.9, ref * 0.03);
+    if (this.liqLine !== null && isFinite(this.liqLine) && far(this.liqLine) <= liqLimit) {
+      hi = Math.max(hi, this.liqLine); lo = Math.min(lo, this.liqLine);
+    }
+    const entryLimit = Math.max(span0 * 2, ref * 0.06);
+    if (this.entryLine !== null && isFinite(this.entryLine) && far(this.entryLine) <= entryLimit) {
+      hi = Math.max(hi, this.entryLine); lo = Math.min(lo, this.entryLine);
+    }
     const pad = (hi - lo) * 0.08 || hi * 0.002 || 0.01;
     return { hi: hi + pad, lo: lo - pad };
   }
@@ -234,9 +251,37 @@ class CandleChart {
     };
     line(this.entryLine, 'rgba(255,255,255,0.55)', '入场', [3, 3]);
     if (this.slLine) this.slLine.forEach(sl => line(sl.price, sl.color, sl.label, [5, 4]));
-    if (this.liqLine !== null) {
-      const shake = this.shock > 0.01 ? (Math.random() - 0.5) * this.shock * 4 : 0;
-      line(this.liqLine + (sc.invY(0) - sc.invY(1)) * shake * 0, '#ff2e5b', '强平线', [], true);
+    if (this.liqLine !== null && isFinite(this.liqLine)) {
+      const inView = this.liqLine <= hl.hi && this.liqLine >= hl.lo;
+      if (inView) {
+        const shake = this.shock > 0.01 ? (Math.random() - 0.5) * this.shock * 4 : 0;
+        line(this.liqLine + (sc.invY(0) - sc.invY(1)) * shake * 0, '#ff2e5b', '强平线', [], true);
+      } else {
+        // 远在视野之外：不撑大 Y 轴，改在最近的一侧画指示条
+        const below = this.liqLine < hl.lo;
+        const yEdge = below ? sc.y1 - 15 : sc.y0 + 15;
+        const pct = Math.abs(this.liqLine - this.px) / this.px * 100;
+        ctx.save();
+        ctx.globalAlpha = 0.92;
+        ctx.setLineDash([4, 4]);
+        ctx.strokeStyle = 'rgba(255,46,91,0.75)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(sc.x0, yEdge); ctx.lineTo(sc.x1, yEdge);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        const tag = (below ? '▼ 强平 ' : '▲ 强平 ') + this.liqLine.toFixed(3) +
+                    '（' + (below ? '低 ' : '高 ') + pct.toFixed(1) + '%）';
+        ctx.font = '600 10px ui-monospace,SFMono-Regular,Menlo,monospace';
+        const tw = ctx.measureText(tag).width + 12;
+        const ty = below ? yEdge - 14 : yEdge + 4;
+        ctx.fillStyle = 'rgba(255,46,91,0.92)';
+        ctx.fillRect(sc.x0 + 6, ty, tw, 14);
+        ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.fillText(tag, sc.x0 + 12, ty + 10.5);
+        ctx.restore();
+      }
     }
 
     // ---- 最新价标牌 ----

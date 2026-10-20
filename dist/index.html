@@ -901,9 +901,26 @@ class CandleChart {
       if (bars[i].h > hi) hi = bars[i].h;
       if (bars[i].l < lo) lo = bars[i].l;
     }
-    if (this.liqLine !== null && isFinite(this.liqLine)) { hi = Math.max(hi, this.liqLine); lo = Math.min(lo, this.liqLine); }
-    if (this.entryLine !== null && isFinite(this.entryLine)) { hi = Math.max(hi, this.entryLine); lo = Math.min(lo, this.entryLine); }
     if (hi === -Infinity) { hi = 1; lo = 0; }
+
+    /* 强平线 / 入场价只有在「离价格不太远」时才参与 Y 轴范围。
+       否则 100 倍杠杆下强平线可能远在几十点之外，
+       会把整张图压成一条直线——买入后价格走势完全看不出来。 */
+    const span0 = Math.max(1e-9, hi - lo);
+    const ref = this.px || hi;
+    const far = (v) => v > hi ? v - hi : (v < lo ? lo - v : 0);
+    /* 阈值同时看「波动跨度」和「现价的百分比」：
+       取两者较大值。这样即使当天波动很小，只要强平线在现价 3% 以内
+       （100 倍杠杆下已经非常危险）也会被画出来；
+       而远在几十点外的强平线则交给边缘指示，不去压扁走势。 */
+    const liqLimit = Math.max(span0 * 0.9, ref * 0.03);
+    if (this.liqLine !== null && isFinite(this.liqLine) && far(this.liqLine) <= liqLimit) {
+      hi = Math.max(hi, this.liqLine); lo = Math.min(lo, this.liqLine);
+    }
+    const entryLimit = Math.max(span0 * 2, ref * 0.06);
+    if (this.entryLine !== null && isFinite(this.entryLine) && far(this.entryLine) <= entryLimit) {
+      hi = Math.max(hi, this.entryLine); lo = Math.min(lo, this.entryLine);
+    }
     const pad = (hi - lo) * 0.08 || hi * 0.002 || 0.01;
     return { hi: hi + pad, lo: lo - pad };
   }
@@ -1050,9 +1067,37 @@ class CandleChart {
     };
     line(this.entryLine, 'rgba(255,255,255,0.55)', '入场', [3, 3]);
     if (this.slLine) this.slLine.forEach(sl => line(sl.price, sl.color, sl.label, [5, 4]));
-    if (this.liqLine !== null) {
-      const shake = this.shock > 0.01 ? (Math.random() - 0.5) * this.shock * 4 : 0;
-      line(this.liqLine + (sc.invY(0) - sc.invY(1)) * shake * 0, '#ff2e5b', '强平线', [], true);
+    if (this.liqLine !== null && isFinite(this.liqLine)) {
+      const inView = this.liqLine <= hl.hi && this.liqLine >= hl.lo;
+      if (inView) {
+        const shake = this.shock > 0.01 ? (Math.random() - 0.5) * this.shock * 4 : 0;
+        line(this.liqLine + (sc.invY(0) - sc.invY(1)) * shake * 0, '#ff2e5b', '强平线', [], true);
+      } else {
+        // 远在视野之外：不撑大 Y 轴，改在最近的一侧画指示条
+        const below = this.liqLine < hl.lo;
+        const yEdge = below ? sc.y1 - 15 : sc.y0 + 15;
+        const pct = Math.abs(this.liqLine - this.px) / this.px * 100;
+        ctx.save();
+        ctx.globalAlpha = 0.92;
+        ctx.setLineDash([4, 4]);
+        ctx.strokeStyle = 'rgba(255,46,91,0.75)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(sc.x0, yEdge); ctx.lineTo(sc.x1, yEdge);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        const tag = (below ? '▼ 强平 ' : '▲ 强平 ') + this.liqLine.toFixed(3) +
+                    '（' + (below ? '低 ' : '高 ') + pct.toFixed(1) + '%）';
+        ctx.font = '600 10px ui-monospace,SFMono-Regular,Menlo,monospace';
+        const tw = ctx.measureText(tag).width + 12;
+        const ty = below ? yEdge - 14 : yEdge + 4;
+        ctx.fillStyle = 'rgba(255,46,91,0.92)';
+        ctx.fillRect(sc.x0 + 6, ty, tw, 14);
+        ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.fillText(tag, sc.x0 + 12, ty + 10.5);
+        ctx.restore();
+      }
     }
 
     // ---- 最新价标牌 ----
@@ -1190,6 +1235,39 @@ const PAIRS = {
 const PAIR_ORDER = ['USDJPY', 'EURJPY', 'GBPJPY', 'CHFJPY', 'ZARJPY', 'AUDJPY', 'TRYJPY', 'MXNJPY'];
 
 /* ---------- 新闻事件库 ---------- */
+/* ================= 黑天鹅事件 =================
+ * 低频、极端、能一击爆掉满仓的账户。
+ * 每一条都对应现实中真实发生过的行情。
+ * warn: 提前几拍给预警（情报力技能可以更早看到）
+ */
+const BLACK_SWAN = [
+  { id: 'snb', name: '瑞士央行取消汇率下限',
+    pairs: ['CHFJPY'], jump: [-0.085, -0.065], spreadMul: 10, dur: 70, warn: 3,
+    head: '⚡ SNB 突袭：取消欧元兑瑞郎下限',
+    desc: '2015 年 1 月真实发生过。瑞郎几分钟内暴涨 30%，券商的止损单全部失效，无数账户直接穿仓。',
+    tag: 'crash' },
+  { id: 'carry_unwind', name: '套息交易全面平仓',
+    pairs: ['ZARJPY', 'TRYJPY', 'MXNJPY'], jump: [-0.075, -0.050], spreadMul: 6, dur: 60, warn: 2,
+    head: '⚡ 套息交易崩盘：高息货币全线暴跌',
+    desc: '全球风险偏好瞬间逆转，机构同时撤出高息货币。利差一夜之间不再重要，只有流动性说了算。',
+    tag: 'crash' },
+  { id: 'yen_storm', name: '避险风暴',
+    pairs: ['USDJPY', 'EURJPY', 'GBPJPY', 'AUDJPY'], jump: [-0.055, -0.038], spreadMul: 5, dur: 55, warn: 2,
+    head: '⚡ 避险风暴：日元全线暴涨',
+    desc: '某个地方出事了。所有人同时买入日元，做多日元对的人在这一刻赚翻，做空的人连反应的时间都没有。',
+    tag: 'crash' },
+  { id: 'flash_crash', name: '闪崩',
+    pairs: ['GBPJPY'], jump: [-0.048, -0.032], spreadMul: 12, dur: 30, warn: 1,
+    head: '⚡ 闪崩：英镑在 30 秒内暴跌',
+    desc: '2016 年 10 月亚洲早盘，英镑在两分钟内崩了 6%。流动性消失了，报价停止更新，你的止损单变成了一张废纸。',
+    tag: 'crash' },
+  { id: 'intervention', name: '日本央行大规模干预',
+    pairs: ['USDJPY'], jump: [-0.042, -0.030], spreadMul: 4, dur: 50, warn: 2,
+    head: '⚡ 日银干预：美元日元瞬间暴跌',
+    desc: '「我们正在密切关注外汇市场」——这句话之后，通常就是几十亿日元的砸盘。',
+    tag: 'crash' },
+];
+
 const NEWS_POOL = [
   { t: '美雇用統計が予想を大幅に上回る', tag: 'bull', mag: [0.55, 1.35], dur: 26, pairs: ['USDJPY'] },
   { t: '米雇用統計、市場予想を大きく下回る', tag: 'bear', mag: [0.55, 1.35], dur: 26, pairs: ['USDJPY'] },
@@ -1373,6 +1451,11 @@ class Market {
     if (this.tickCount % TICKS_PER_DAY === 0) {
       this.day++;
       this.dayNews();
+      this.maybeBlackSwan();
+    }
+    if (this.swan) {
+      this.swan.left--;
+      if (this.swan.left <= 0) this.swan = null;
     }
     // 预定新闻
     if (--this.nextNews <= 0) {
@@ -1381,6 +1464,49 @@ class Market {
     }
     return { made, day: this.day };
   }
+
+  /* ===== 黑天鹅 ===== */
+  /**
+   * 每天判定一次是否触发黑天鹅（默认 4.5%）。
+   * 触发时：相关品种瞬间跳空 + 点差暴涨，持续 dur 个 tick。
+   */
+  maybeBlackSwan() {
+    if (this.swan) return null;                      // 已有事件在生效
+    if (this.rnd() > 0.045) return null;
+    const ev = BLACK_SWAN[Math.floor(this.rnd() * BLACK_SWAN.length)];
+    const mag = ev.jump[0] + this.rnd() * (ev.jump[1] - ev.jump[0]);
+    const hit = [];
+    for (const id of ev.pairs) {
+      const s = this.map[id];
+      if (!s) continue;
+      // 按比例跳空（直接改价格，不经过正常波动）
+      const from = s.price;
+      s.price = Math.max(0.3, s.price * (1 + mag));
+      if (s.cur) {
+        s.cur.c = s.price;
+        s.cur.h = Math.max(s.cur.h, from);
+        s.cur.l = Math.min(s.cur.l, s.price);
+      } else if (s.bars.length) {
+        const lb = s.bars[s.bars.length - 1];
+        lb.c = s.price;
+        lb.h = Math.max(lb.h, from);
+        lb.l = Math.min(lb.l, s.price);
+      }
+      hit.push({ id, from, to: s.price, pct: (s.price / from - 1) * 100 });
+    }
+    this.swan = {
+      ev, mag, hit, left: ev.dur,
+      spreadMul: ev.spreadMul || 4,
+      atDay: this.day,
+    };
+    return this.swan;
+  }
+
+  /** 黑天鹅剩余 tick */
+  swanLeft() { return this.swan ? this.swan.left : 0; }
+
+  /** 当前点差倍率（黑天鹅期间放大） */
+  spreadMulNow() { return this.swan ? (this.swan.spreadMul || 4) : 1; }
 
   dayNews() {
     // 每日隔夜利息已由 lever 结算；这里处理周末跳空与波动率
@@ -1613,6 +1739,49 @@ const ACHIEVEMENTS = [
     test: c => ['fees','rebate','intel','credit','swap','guts'].some(k => (c.st.perks[k] || 0) >= c.perkMax(k)) },
 ];
 
+/* ================= 结局 =================
+ * 达到某些状态时触发，展示一段收束文字。
+ * 触发后仍可继续玩（自由模式），只是记录你已经「走到过那里」。
+ */
+const ENDINGS = [
+  { id: 'revenge', tone: 'good', name: '赎罪',
+    cond: c => c.netAsset() >= 20000000,
+    title: '你赢回了那 2000 万',
+    body: '账户里的数字终于越过了那条线。<br><br>' +
+      '但你想不起来自己是什么时候开始不再看新闻、不再有周末、不再接电话的。<br>' +
+      '母亲当年也是这样，只是方向相反。<br><br>' +
+      '<b class="hl">2000 万不是终点。它只是证明了你也能站上那张桌子。</b><br><br>' +
+      '真正的问题是：你现在还要不要下来。' },
+  { id: 'ruin', tone: 'bad', name: '坠落',
+    cond: c => c.totalLoan() >= 10000000,
+    title: '负债 1000 万',
+    body: '催收的电话一天比一天早。<br>' +
+      '你已经不再计算利息了——金额太大，大到它变成一个抽象的数字。<br><br>' +
+      '<b class="warn">你借的每一分钱，都是别人相信你才借出去的。</b><br><br>' +
+      '母亲的故事，原来有两个版本。' },
+  { id: 'wipeout', tone: 'bad', name: '清盘',
+    cond: c => c.netAsset() < 10000 && c.totalLoan() > 0,
+    title: '账户清零',
+    body: '净值低于 1 万日元。这个数字已经没有任何操作的意义了。<br><br>' +
+      '你还能再借、再入金、再试一次。<br>' +
+      '这就是这个游戏最残酷的地方：<b class="hl">它从不拦你。</b><br><br>' +
+      '要不要再来一次，是你自己的事。' },
+  { id: 'peace', tone: 'good', name: '平淡',
+    cond: c => c.st.stats.daysPlayed >= 60 && c.totalLoan() <= 0 &&
+               c.netAsset() >= c.st.seed * 0.9 && !c.hasPosition() && c.st.stats.mental >= 70,
+    title: '你活着，而且没欠钱',
+    body: '第 60 天。没有持仓，没有负债，净值几乎没变。<br><br>' +
+      '在 FX 里，这已经打败了绝大多数人。<br><br>' +
+      '<b class="hl">不是每一场复仇都需要赢。有时候活下来本身就是答案。</b>' },
+  { id: 'tycoon', tone: 'good', name: '深渊之上',
+    cond: c => c.netAsset() >= 100000000,
+    title: '一亿',
+    body: '你早就超过了那个数字。<br><br>' +
+      '两千万不够，那你做到了它的五十倍。<br>' +
+      '现在你终于明白母亲当年为什么停不下来——<br>' +
+      '<b class="hl">赢的感觉，比输的感觉更容易上瘾。</b>' },
+];
+
 /* ================= 每日任务 ================= */
 /**
  * 每天刷新 3 个，完成得洞察点。
@@ -1704,6 +1873,7 @@ function initialState() {
              holdCount: 0,         // 时长统计样本数
              perksBought: 0, byPair: {} },  // 买过多少次技能 / 分品种统计
     achievements: [],              // 已解锁的成就 id
+    endingsSeen: [],               // 已触发的结局 id
     dailyTasks: [],                // 当前周期的限时任务（3 个）
     dailyEndAt: 0,                 // 本轮结束的真实时间戳（ms）
     dailyCycleMs: 15 * 60 * 1000,  // 轮次长度：现实 15 分钟
@@ -1770,7 +1940,11 @@ class Core {
   /** 点差倍率：交易成本减免 Lv1-3 → 0.9 / 0.8 / 0.7 */
   spreadMul() { return 1 - 0.1 * (this.st.perks.fees || 0); }
   /** 某品种的实际点差 */
-  spreadOf(pid) { return this.market.pair(pid).def.spread * this.spreadMul(); }
+  spreadOf(pid) {
+    // 黑天鹅期间点差会暴涨——这是真实市场里最先失控的东西
+    const swanMul = this.market.spreadMulNow ? this.market.spreadMulNow() : 1;
+    return this.market.pair(pid).def.spread * this.spreadMul() * swanMul;
+  }
 
   /** 爆仓保险返还比例 */
   rebateRate() { return 0.1 * (this.st.perks.rebate || 0); }
@@ -1969,6 +2143,26 @@ class Core {
     }).filter(Boolean);
   }
 
+  /* ===== 结局 ===== */
+  /** 检查是否达成某个结局。触发后记录，不重复弹。 */
+  checkEndings() {
+    if (this.agent) return null;
+    if (!Array.isArray(this.st.endingsSeen)) this.st.endingsSeen = [];
+    for (const e of ENDINGS) {
+      if (this.st.endingsSeen.indexOf(e.id) >= 0) continue;
+      let ok = false;
+      try { ok = !!e.cond(this); } catch (err) { ok = false; }
+      if (ok) {
+        this.st.endingsSeen.push(e.id);
+        this.fx('bigwin'); this.hap('win');
+        this.pushLog('ending', `结局：${e.title}`, 0);
+        this.emit('ending', { ending: e });
+        return e;
+      }
+    }
+    return null;
+  }
+
   /* ===== 成就 ===== */
   hasAch(id) { return this.st.achievements.indexOf(id) >= 0; }
 
@@ -2120,6 +2314,16 @@ class Core {
       const v = p.units * s.def.price * rate * mult * this.swapMul(rate >= 0 ? 1 : -1);
       swap += v;
     }
+    // 黑天鹅播报
+    if (this.market.swan && !this.agent) {
+      const sw = this.market.swan;
+      this.pushLog('swan', sw.ev.head, 0);
+      this.emit('blackswan', {
+        ev: sw.ev, hit: sw.hit,
+        spreadMul: sw.spreadMul,
+      });
+      this.fx('error'); this.hap('lose');
+    }
     this.st.swapToday = swap;
     this.st.cash += swap;
     if (Math.abs(swap) > 1) this.emit('swap', { amount: swap, mult });
@@ -2133,6 +2337,7 @@ class Core {
 
     this.emit('newday', { day: d });
     this.checkAchievements();
+    this.checkEndings();
     this.save();
   }
 
@@ -2280,6 +2485,7 @@ class Core {
     this.emit('close', { rec, pnl });
     this.checkAchievements();
     this.checkDaily('instant');
+    this.checkEndings();
     this.save();
     return { ok: true, pnl, rec };
   }
@@ -3085,6 +3291,10 @@ const UI = {
       <div class="pair-tabs" id="pairTabs"></div>
       <div id="chartWrap">
         <canvas id="chart"></canvas>
+        <div id="swanTag" style="display:none;position:absolute;top:7px;left:50%;transform:translateX(-50%);
+          padding:3px 12px;border-radius:20px;background:rgba(255,46,91,.92);color:#fff;
+          font-size:10.5px;font-weight:800;letter-spacing:.05em;pointer-events:none;
+          box-shadow:0 2px 12px rgba(255,46,91,.5);z-index:5"></div>
         <div class="chart-badge">
           <span class="p" id="cpPrice">—</span>
           <span class="d" id="cpDelta">—</span>
@@ -3518,6 +3728,18 @@ const UI = {
     bar.style.background = rate < 100 ? 'var(--dn)' : rate < 200 ? 'var(--gold)' : 'var(--up)';
     $$('#hudDate').textContent = this.dateText();
 
+    // 黑天鹅警示条
+    const swTag = $$('#swanTag');
+    if (swTag) {
+      const sw = c.market.swan;
+      if (sw) {
+        swTag.style.display = 'block';
+        swTag.textContent = '⚡ ' + sw.ev.name + '　点差 ' + sw.spreadMul + '×';
+      } else {
+        swTag.style.display = 'none';
+      }
+    }
+
     // 「入金」按钮直接显示钱包里还有多少钱（之前要点了才知道）
     const dep = $$('#btnDeposit');
     if (dep) {
@@ -3594,6 +3816,29 @@ const UI = {
       }
       case 'collect': {
         setTimeout(() => Sheets.msg('取立て', `【${ev.def.name}】的催收来了。<br>当前负债 <b class="mono" style="color:var(--dn)">${U.fmt(ev.amount)} 円</b>。<br>${ev.def.danger >= 4 ? '「再不还，就不是钱的问题了。」' : '「还款日到了哦。」'}`, ev.def.danger >= 4 ? 'bad' : 'warn'), 400);
+        break;
+      }
+      case 'blackswan': {
+        const sw = ev;
+        const rows = (sw.hit || []).map(h =>
+          `<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px">
+            <span style="color:${PAIRS[h.id].color}">${PAIRS[h.id].short}</span>
+            <span class="mono" style="color:var(--dn);font-weight:700">${h.pct >= 0 ? '+' : ''}${h.pct.toFixed(1)}%</span>
+          </div>`).join('');
+        setTimeout(() => Sheets.msg('⚡ 黑天鹅',
+          `<div style="font-size:13px;font-weight:700;color:var(--dn);line-height:1.6">${sw.ev.head}</div>
+           <div style="margin:9px 0">${rows}</div>
+           <div style="font-size:11px;color:var(--tx2);line-height:1.7">${sw.ev.desc}</div>
+           <div style="margin-top:9px;padding:8px 10px;border-radius:9px;background:rgba(255,77,109,.12);
+             border:1px solid rgba(255,77,109,.3);font-size:11.5px">
+             点差扩大 <b style="color:var(--dn)">${sw.spreadMul} 倍</b>，持续约 ${Math.round((sw.ev.dur || 40) / 24)} 天。<br>
+             <span style="color:var(--tx3)">这时候挂止损单，可能直接被打在异常价位上。</span>
+           </div>`, 'bad'), 300);
+        break;
+      }
+      case 'ending': {
+        const e = ev.ending;
+        setTimeout(() => this.showEnding(e), 500);
         break;
       }
       case 'daily': {
@@ -3850,6 +4095,43 @@ const UI = {
   },
 
   /* ---------- 人物屏 ---------- */
+  /** 结局全屏画面 */
+  showEnding(e) {
+    // 用实例字段追踪，避免 getElementById 查一个动态创建的节点
+    if (this._endingVeil) { this._endingVeil.remove(); this._endingVeil = null; }
+    const veil = el('div', '', '');
+    veil.setAttribute('data-ending-veil', '1');
+    veil.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;' +
+      'align-items:center;justify-content:center;padding:26px;text-align:center;' +
+      'background:radial-gradient(circle at 50% 30%, rgba(20,26,40,.98), rgba(3,5,9,.99));' +
+      'opacity:0;transition:opacity .8s ease';
+    const col = e.tone === 'good' ? 'var(--gold)' : 'var(--dn)';
+    veil.innerHTML = `
+      <div style="font-size:12px;letter-spacing:.35em;color:${col};opacity:.8">
+        ${e.tone === 'good' ? 'E N D I N G' : 'E N D I N G'}</div>
+      <div style="margin-top:18px;font-size:13px;color:var(--tx3)">结局 · ${e.name}</div>
+      <div style="margin-top:10px;font-size:26px;font-weight:800;color:var(--tx);line-height:1.4">
+        ${e.title}</div>
+      <div style="margin-top:22px;max-width:520px;font-size:13.5px;line-height:2;color:var(--tx2)">
+        ${e.body}</div>
+      <button class="btn btn-gold" style="margin-top:30px;min-width:180px" id="endingOk">
+        继续（自由模式）</button>
+      <div style="margin-top:12px;font-size:11px;color:var(--tx3)">
+        已经走过这个结局，但游戏不会结束——就像现实一样。</div>`;
+    document.body.appendChild(veil);
+    this._endingVeil = veil;
+    requestAnimationFrame(() => { veil.style.opacity = '1'; });
+    const close = () => {
+      veil.style.opacity = '0';
+      setTimeout(() => {
+        veil.remove();
+        if (this._endingVeil === veil) this._endingVeil = null;
+      }, 700);
+    };
+    veil.querySelector('#endingOk').addEventListener('click', close);
+    Sfx.bigwin(); Haptics.win();
+  },
+
   /** 毫秒 → mm:ss */
   fmtCd(ms) {
     const s = Math.max(0, Math.ceil(ms / 1000));
@@ -3923,6 +4205,10 @@ const UI = {
         <button class="btn btn-ghost btn-sm" id="btnAch" style="flex:1">
           🏆 成就 <b style="color:var(--gold)">${(c.st.achievements || []).length}</b>/${ACHIEVEMENTS.length}</button>
         <button class="btn btn-ghost btn-sm" id="btnStats" style="flex:1">📊 交易统计</button>
+      </div>
+      <div class="row" style="margin-top:8px;gap:8px">
+        <button class="btn btn-ghost btn-sm" id="btnEndings" style="flex:1">
+          🎬 结局 <b style="color:var(--gold)">${(c.st.endingsSeen || []).length}</b>/${ENDINGS.length}</button>
       </div>
       <div style="margin-top:10px;padding:9px 11px;border-radius:11px;
         background:rgba(140,180,255,.07);border:1px solid rgba(140,180,255,.22);font-size:11px;line-height:1.72">
@@ -4007,6 +4293,8 @@ const UI = {
     if (ba) bindTap(ba, () => Sheets.achievements(c));
     const bs = $$('#btnStats');
     if (bs) bindTap(bs, () => Sheets.stats(c));
+    const be = $$('#btnEndings');
+    if (be) bindTap(be, () => Sheets.endings(c));
   },
 
   /* ---------- 设定屏 ---------- */
@@ -4281,6 +4569,32 @@ const Sheets = {
     $('#shOk', sh).addEventListener('click', () => this.close());
     Haptics[good ? 'win' : 'lose']();
   },
+  /** 结局图鉴 */
+  endings(core) {
+    const seen = core.st.endingsSeen || [];
+    const rows = ENDINGS.map(e => {
+      const got = seen.indexOf(e.id) >= 0;
+      const col = e.tone === 'good' ? 'var(--gold)' : 'var(--dn)';
+      return `<div style="padding:10px 0;border-bottom:1px solid rgba(255,255,255,.05);
+          ${got ? '' : 'opacity:.45'}">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:11px;font-weight:800;color:${got ? col : 'var(--tx3)'}">
+            ${got ? '◆' : '◇'} ${e.name}</span>
+          <span style="font-size:10px;color:var(--tx3);margin-left:auto">
+            ${got ? '已达成' : '未触发'}</span>
+        </div>
+        <div style="font-size:11.5px;color:${got ? 'var(--tx2)' : 'var(--tx3)'};margin-top:5px;line-height:1.6">
+          ${got ? e.title : '？？？'}</div>
+      </div>`;
+    }).join('');
+    const sh = Sheets.base(`
+      <h3>🎬 结局 <span style="font-size:13px;color:var(--gold);margin-left:6px">${seen.length} / ${ENDINGS.length}</span></h3>
+      <div class="sub">走到这些状态时会触发一段收束。触发后游戏不会结束，你可以继续。</div>
+      <div style="max-height:56vh;overflow-y:auto;margin-top:8px">${rows}</div>
+      <button class="btn btn-ghost" id="endClose" style="width:100%;margin-top:10px">关闭</button>`);
+    $$('#endClose', sh).addEventListener('click', () => Sheets.close());
+  },
+
   /** 成就抽屉 */
   achievements(core) {
     const sum = core.achSummary();
@@ -6180,7 +6494,7 @@ const AIUI = (() => {
     ui.renderAll();
 
     // 调试句柄（只读用途；不给任何外部通讯能力）
-    window.__FXK__ = { core, ui, Tutorials, Chapters, AIUI, AIPlayer, LLM, version: '1.3.0' };
+    window.__FXK__ = { core, ui, Tutorials, Chapters, AIUI, AIPlayer, LLM, version: '1.4.0' };
 
     // 序章
     if (had.ok && (core.st.stats.daysPlayed > 0 || core.st.stats.level > 1)) {

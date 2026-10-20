@@ -18,7 +18,7 @@ let pass=0,fail=0; const chk=(m,c,i)=>c?(pass++,console.log('  ✓ '+m)):(fail++
 (async()=>{
   await sleep(400); click($('.cv-btn')); await sleep(600);
   const K=window.__FXK__, c=K.core;
-  chk('版本号 1.3.0', K.version==='1.3.0', K.version);
+  chk('版本号 1.4.0', K.version==='1.4.0', K.version);
   chk('品种标签 8 个', $$('#pairTabs .pair-tab').length===8, $$('#pairTabs .pair-tab').length+' 个');
   click($('#tabs button[data-s="me"]')); await sleep(300);
   chk('人物页有成就按钮', !!$('#btnAch'));

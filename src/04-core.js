@@ -116,6 +116,49 @@ const ACHIEVEMENTS = [
     test: c => ['fees','rebate','intel','credit','swap','guts'].some(k => (c.st.perks[k] || 0) >= c.perkMax(k)) },
 ];
 
+/* ================= 结局 =================
+ * 达到某些状态时触发，展示一段收束文字。
+ * 触发后仍可继续玩（自由模式），只是记录你已经「走到过那里」。
+ */
+const ENDINGS = [
+  { id: 'revenge', tone: 'good', name: '赎罪',
+    cond: c => c.netAsset() >= 20000000,
+    title: '你赢回了那 2000 万',
+    body: '账户里的数字终于越过了那条线。<br><br>' +
+      '但你想不起来自己是什么时候开始不再看新闻、不再有周末、不再接电话的。<br>' +
+      '母亲当年也是这样，只是方向相反。<br><br>' +
+      '<b class="hl">2000 万不是终点。它只是证明了你也能站上那张桌子。</b><br><br>' +
+      '真正的问题是：你现在还要不要下来。' },
+  { id: 'ruin', tone: 'bad', name: '坠落',
+    cond: c => c.totalLoan() >= 10000000,
+    title: '负债 1000 万',
+    body: '催收的电话一天比一天早。<br>' +
+      '你已经不再计算利息了——金额太大，大到它变成一个抽象的数字。<br><br>' +
+      '<b class="warn">你借的每一分钱，都是别人相信你才借出去的。</b><br><br>' +
+      '母亲的故事，原来有两个版本。' },
+  { id: 'wipeout', tone: 'bad', name: '清盘',
+    cond: c => c.netAsset() < 10000 && c.totalLoan() > 0,
+    title: '账户清零',
+    body: '净值低于 1 万日元。这个数字已经没有任何操作的意义了。<br><br>' +
+      '你还能再借、再入金、再试一次。<br>' +
+      '这就是这个游戏最残酷的地方：<b class="hl">它从不拦你。</b><br><br>' +
+      '要不要再来一次，是你自己的事。' },
+  { id: 'peace', tone: 'good', name: '平淡',
+    cond: c => c.st.stats.daysPlayed >= 60 && c.totalLoan() <= 0 &&
+               c.netAsset() >= c.st.seed * 0.9 && !c.hasPosition() && c.st.stats.mental >= 70,
+    title: '你活着，而且没欠钱',
+    body: '第 60 天。没有持仓，没有负债，净值几乎没变。<br><br>' +
+      '在 FX 里，这已经打败了绝大多数人。<br><br>' +
+      '<b class="hl">不是每一场复仇都需要赢。有时候活下来本身就是答案。</b>' },
+  { id: 'tycoon', tone: 'good', name: '深渊之上',
+    cond: c => c.netAsset() >= 100000000,
+    title: '一亿',
+    body: '你早就超过了那个数字。<br><br>' +
+      '两千万不够，那你做到了它的五十倍。<br>' +
+      '现在你终于明白母亲当年为什么停不下来——<br>' +
+      '<b class="hl">赢的感觉，比输的感觉更容易上瘾。</b>' },
+];
+
 /* ================= 每日任务 ================= */
 /**
  * 每天刷新 3 个，完成得洞察点。
@@ -207,6 +250,7 @@ function initialState() {
              holdCount: 0,         // 时长统计样本数
              perksBought: 0, byPair: {} },  // 买过多少次技能 / 分品种统计
     achievements: [],              // 已解锁的成就 id
+    endingsSeen: [],               // 已触发的结局 id
     dailyTasks: [],                // 当前周期的限时任务（3 个）
     dailyEndAt: 0,                 // 本轮结束的真实时间戳（ms）
     dailyCycleMs: 15 * 60 * 1000,  // 轮次长度：现实 15 分钟
@@ -273,7 +317,11 @@ class Core {
   /** 点差倍率：交易成本减免 Lv1-3 → 0.9 / 0.8 / 0.7 */
   spreadMul() { return 1 - 0.1 * (this.st.perks.fees || 0); }
   /** 某品种的实际点差 */
-  spreadOf(pid) { return this.market.pair(pid).def.spread * this.spreadMul(); }
+  spreadOf(pid) {
+    // 黑天鹅期间点差会暴涨——这是真实市场里最先失控的东西
+    const swanMul = this.market.spreadMulNow ? this.market.spreadMulNow() : 1;
+    return this.market.pair(pid).def.spread * this.spreadMul() * swanMul;
+  }
 
   /** 爆仓保险返还比例 */
   rebateRate() { return 0.1 * (this.st.perks.rebate || 0); }
@@ -472,6 +520,26 @@ class Core {
     }).filter(Boolean);
   }
 
+  /* ===== 结局 ===== */
+  /** 检查是否达成某个结局。触发后记录，不重复弹。 */
+  checkEndings() {
+    if (this.agent) return null;
+    if (!Array.isArray(this.st.endingsSeen)) this.st.endingsSeen = [];
+    for (const e of ENDINGS) {
+      if (this.st.endingsSeen.indexOf(e.id) >= 0) continue;
+      let ok = false;
+      try { ok = !!e.cond(this); } catch (err) { ok = false; }
+      if (ok) {
+        this.st.endingsSeen.push(e.id);
+        this.fx('bigwin'); this.hap('win');
+        this.pushLog('ending', `结局：${e.title}`, 0);
+        this.emit('ending', { ending: e });
+        return e;
+      }
+    }
+    return null;
+  }
+
   /* ===== 成就 ===== */
   hasAch(id) { return this.st.achievements.indexOf(id) >= 0; }
 
@@ -623,6 +691,16 @@ class Core {
       const v = p.units * s.def.price * rate * mult * this.swapMul(rate >= 0 ? 1 : -1);
       swap += v;
     }
+    // 黑天鹅播报
+    if (this.market.swan && !this.agent) {
+      const sw = this.market.swan;
+      this.pushLog('swan', sw.ev.head, 0);
+      this.emit('blackswan', {
+        ev: sw.ev, hit: sw.hit,
+        spreadMul: sw.spreadMul,
+      });
+      this.fx('error'); this.hap('lose');
+    }
     this.st.swapToday = swap;
     this.st.cash += swap;
     if (Math.abs(swap) > 1) this.emit('swap', { amount: swap, mult });
@@ -636,6 +714,7 @@ class Core {
 
     this.emit('newday', { day: d });
     this.checkAchievements();
+    this.checkEndings();
     this.save();
   }
 
@@ -783,6 +862,7 @@ class Core {
     this.emit('close', { rec, pnl });
     this.checkAchievements();
     this.checkDaily('instant');
+    this.checkEndings();
     this.save();
     return { ok: true, pnl, rec };
   }

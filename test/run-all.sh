@@ -14,6 +14,7 @@ node test/achievements.js
 node test/ai-pacing.js
 node test/ai-contest.js
 node test/daily-tasks.js
+node test/events-endings.js
 node test/ai-native-bridge.js
 if [ -d /tmp/domtest/node_modules/jsdom ]; then
   NODE_PATH=/tmp/domtest/node_modules node test/dom-smoke.js
@@ -23,6 +24,8 @@ if [ -d /tmp/domtest/node_modules/jsdom ]; then
   NODE_PATH=/tmp/domtest/node_modules node test/achievements-ui.js
   NODE_PATH=/tmp/domtest/node_modules node test/ai-pacing-ui.js
   NODE_PATH=/tmp/domtest/node_modules node test/daily-ui.js
+  NODE_PATH=/tmp/domtest/node_modules node test/chart-scale.js
+  NODE_PATH=/tmp/domtest/node_modules node test/v14-ui.js
 else
   echo "（跳过 DOM 冒烟测试：未安装 jsdom。安装：cd /tmp/domtest && npm i jsdom）"
 fi

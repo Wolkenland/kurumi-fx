@@ -63,6 +63,39 @@ const PAIRS = {
 const PAIR_ORDER = ['USDJPY', 'EURJPY', 'GBPJPY', 'CHFJPY', 'ZARJPY', 'AUDJPY', 'TRYJPY', 'MXNJPY'];
 
 /* ---------- 新闻事件库 ---------- */
+/* ================= 黑天鹅事件 =================
+ * 低频、极端、能一击爆掉满仓的账户。
+ * 每一条都对应现实中真实发生过的行情。
+ * warn: 提前几拍给预警（情报力技能可以更早看到）
+ */
+const BLACK_SWAN = [
+  { id: 'snb', name: '瑞士央行取消汇率下限',
+    pairs: ['CHFJPY'], jump: [-0.085, -0.065], spreadMul: 10, dur: 70, warn: 3,
+    head: '⚡ SNB 突袭：取消欧元兑瑞郎下限',
+    desc: '2015 年 1 月真实发生过。瑞郎几分钟内暴涨 30%，券商的止损单全部失效，无数账户直接穿仓。',
+    tag: 'crash' },
+  { id: 'carry_unwind', name: '套息交易全面平仓',
+    pairs: ['ZARJPY', 'TRYJPY', 'MXNJPY'], jump: [-0.075, -0.050], spreadMul: 6, dur: 60, warn: 2,
+    head: '⚡ 套息交易崩盘：高息货币全线暴跌',
+    desc: '全球风险偏好瞬间逆转，机构同时撤出高息货币。利差一夜之间不再重要，只有流动性说了算。',
+    tag: 'crash' },
+  { id: 'yen_storm', name: '避险风暴',
+    pairs: ['USDJPY', 'EURJPY', 'GBPJPY', 'AUDJPY'], jump: [-0.055, -0.038], spreadMul: 5, dur: 55, warn: 2,
+    head: '⚡ 避险风暴：日元全线暴涨',
+    desc: '某个地方出事了。所有人同时买入日元，做多日元对的人在这一刻赚翻，做空的人连反应的时间都没有。',
+    tag: 'crash' },
+  { id: 'flash_crash', name: '闪崩',
+    pairs: ['GBPJPY'], jump: [-0.048, -0.032], spreadMul: 12, dur: 30, warn: 1,
+    head: '⚡ 闪崩：英镑在 30 秒内暴跌',
+    desc: '2016 年 10 月亚洲早盘，英镑在两分钟内崩了 6%。流动性消失了，报价停止更新，你的止损单变成了一张废纸。',
+    tag: 'crash' },
+  { id: 'intervention', name: '日本央行大规模干预',
+    pairs: ['USDJPY'], jump: [-0.042, -0.030], spreadMul: 4, dur: 50, warn: 2,
+    head: '⚡ 日银干预：美元日元瞬间暴跌',
+    desc: '「我们正在密切关注外汇市场」——这句话之后，通常就是几十亿日元的砸盘。',
+    tag: 'crash' },
+];
+
 const NEWS_POOL = [
   { t: '美雇用統計が予想を大幅に上回る', tag: 'bull', mag: [0.55, 1.35], dur: 26, pairs: ['USDJPY'] },
   { t: '米雇用統計、市場予想を大きく下回る', tag: 'bear', mag: [0.55, 1.35], dur: 26, pairs: ['USDJPY'] },
@@ -246,6 +279,11 @@ class Market {
     if (this.tickCount % TICKS_PER_DAY === 0) {
       this.day++;
       this.dayNews();
+      this.maybeBlackSwan();
+    }
+    if (this.swan) {
+      this.swan.left--;
+      if (this.swan.left <= 0) this.swan = null;
     }
     // 预定新闻
     if (--this.nextNews <= 0) {
@@ -254,6 +292,49 @@ class Market {
     }
     return { made, day: this.day };
   }
+
+  /* ===== 黑天鹅 ===== */
+  /**
+   * 每天判定一次是否触发黑天鹅（默认 4.5%）。
+   * 触发时：相关品种瞬间跳空 + 点差暴涨，持续 dur 个 tick。
+   */
+  maybeBlackSwan() {
+    if (this.swan) return null;                      // 已有事件在生效
+    if (this.rnd() > 0.045) return null;
+    const ev = BLACK_SWAN[Math.floor(this.rnd() * BLACK_SWAN.length)];
+    const mag = ev.jump[0] + this.rnd() * (ev.jump[1] - ev.jump[0]);
+    const hit = [];
+    for (const id of ev.pairs) {
+      const s = this.map[id];
+      if (!s) continue;
+      // 按比例跳空（直接改价格，不经过正常波动）
+      const from = s.price;
+      s.price = Math.max(0.3, s.price * (1 + mag));
+      if (s.cur) {
+        s.cur.c = s.price;
+        s.cur.h = Math.max(s.cur.h, from);
+        s.cur.l = Math.min(s.cur.l, s.price);
+      } else if (s.bars.length) {
+        const lb = s.bars[s.bars.length - 1];
+        lb.c = s.price;
+        lb.h = Math.max(lb.h, from);
+        lb.l = Math.min(lb.l, s.price);
+      }
+      hit.push({ id, from, to: s.price, pct: (s.price / from - 1) * 100 });
+    }
+    this.swan = {
+      ev, mag, hit, left: ev.dur,
+      spreadMul: ev.spreadMul || 4,
+      atDay: this.day,
+    };
+    return this.swan;
+  }
+
+  /** 黑天鹅剩余 tick */
+  swanLeft() { return this.swan ? this.swan.left : 0; }
+
+  /** 当前点差倍率（黑天鹅期间放大） */
+  spreadMulNow() { return this.swan ? (this.swan.spreadMul || 4) : 1; }
 
   dayNews() {
     // 每日隔夜利息已由 lever 结算；这里处理周末跳空与波动率
